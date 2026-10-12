@@ -136,6 +136,8 @@ resources:
       next_review_date:
         type: date
   subscription-alias:
+    table: subscription_aliases
+    plural: subscription-aliases
     filters:
     - subscription_id
     - mapping_status

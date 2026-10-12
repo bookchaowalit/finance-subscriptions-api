@@ -21,7 +21,7 @@ Every resource has list, stats, get, get-by-legacy-id, create, patch and delete
 |---|---|---|
 | `/v1/subscriptions` | subscription | `status`, `owner_scope`, `provider`, `billing_interval` |
 | `/v1/subscription-reviews` | subscription-review | `subscription_id`, `verdict` |
-| `/v1/subscription-aliass` | subscription-alias | `subscription_id`, `mapping_status` |
+| `/v1/subscription-aliases` | subscription-alias | `subscription_id`, `mapping_status` |
 
 ## Develop and operate
 
