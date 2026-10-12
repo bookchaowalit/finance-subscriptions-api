@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "subscriptions": {
+      "command": ".venv/bin/subscriptions-mcp",
+      "args": []
+    }
+  }
+}

@@ -1,0 +1,161 @@
+# Subscriptions cell: one of the ten finance services split from the retired finance_* tables (2026-10-12).
+# Recurring costs, their value reviews and the aliases that map statement lines to them.
+# Amounts are real (float) like every kit cell; cross-cell ids (account_id, ...) are plain bigints, not foreign keys.
+cell: subscriptions
+title: Subscriptions
+resources:
+  subscription:
+    filters:
+    - status
+    - owner_scope
+    - provider
+    - billing_interval
+    unique:
+    - - name
+      - provider
+      - owner_scope
+    fields:
+      name:
+        type: text
+        required: true
+        max_length: 200
+      provider:
+        type: text
+        required: true
+        max_length: 200
+      category:
+        type: text
+        default: software
+      owner_scope:
+        type: enum
+        values:
+        - personal
+        - solo_empire
+        - venture
+        - client
+        - shared
+        default: solo_empire
+      status:
+        type: enum
+        values:
+        - trial
+        - active
+        - paused
+        - cancelled
+        - expired
+        default: active
+      billing_interval:
+        type: enum
+        values:
+        - weekly
+        - monthly
+        - quarterly
+        - yearly
+        - one_time
+        - usage
+        default: monthly
+      amount:
+        type: real
+        min: 0
+        required: true
+      currency:
+        type: text
+        default: THB
+        max_length: 12
+      started_on:
+        type: date
+      next_billing_date:
+        type: date
+      cancelled_on:
+        type: date
+      auto_renew:
+        type: bool
+        default: true
+      account_id:
+        type: bigint
+      project_id:
+        type: bigint
+      goal_id:
+        type: bigint
+      source_ref:
+        type: text
+      notes: &id001
+        type: text
+  subscription-review:
+    filters:
+    - subscription_id
+    - verdict
+    unique:
+    - - subscription_id
+      - review_date
+    order: review_date
+    fields:
+      subscription_id:
+        type: ref
+        to: subscription
+        required: true
+      review_date:
+        type: date
+        required: true
+      period_start:
+        type: date
+        required: true
+      period_end:
+        type: date
+        required: true
+      usage_events:
+        type: int
+        min: 0
+      usage_hours:
+        type: real
+        min: 0
+      time_saved_hours:
+        type: real
+        min: 0
+      revenue_attributed:
+        type: real
+        min: 0
+      revenue_currency:
+        type: text
+        max_length: 12
+      value_score:
+        type: int
+        min: 0
+        max: 100
+      verdict:
+        type: enum
+        values:
+        - worth_it
+        - conditional
+        - not_worth_it
+        - insufficient_data
+        default: insufficient_data
+      evidence:
+        type: text
+      notes: *id001
+      next_review_date:
+        type: date
+  subscription-alias:
+    filters:
+    - subscription_id
+    - mapping_status
+    fields:
+      alias:
+        type: text
+        required: true
+        unique: true
+        max_length: 300
+      subscription_id:
+        type: ref
+        to: subscription
+      mapping_status:
+        type: enum
+        values:
+        - resolved
+        - unresolved
+        default: unresolved
+      evidence:
+        type: text
+      source:
+        type: text
+        default: subscription-review

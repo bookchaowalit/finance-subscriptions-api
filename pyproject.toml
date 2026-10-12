@@ -1,0 +1,35 @@
+[project]
+name = "subscriptions"
+version = "0.1.0"
+description = "Subscriptions cell: its own API and database"
+requires-python = ">=3.12"
+dependencies = [
+    "psycopg[binary]>=3.2,<4",
+    "fastapi>=0.115,<1",
+    "pyjwt[crypto]>=2.10,<3",
+    # [standard] = uvloop + httptools: +82% RPS in polyglot-benchmark-lab, and avoids the h11 Nagle stall
+    "uvicorn[standard]>=0.30,<1",
+    "httpx>=0.27,<1",
+    "pyyaml>=6,<7",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=2.3,<3"]
+dev = ["pytest>=8", "pgserver>=0.1.4", "mcp>=2.3,<3"]
+
+[project.scripts]
+subscriptions-mcp = "cellkit.mcp:main"
+subscriptions-api = "cellkit.server:api"
+subscriptions-publish = "cellkit.server:run_publish"
+subscriptions-db = "cellkit.server:run_db"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
