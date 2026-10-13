@@ -1,5 +1,4 @@
-# subscriptions
-
+# finance-subscriptions-api
 The Subscriptions cell: its own API (Railway, serverless) and its own Neon
 database, first generated from `cell.yaml` (one of the ten finance
 services split on 2026-10-12). It
@@ -8,8 +7,8 @@ HTTP with the caller's token.
 
 | | |
 |---|---|
-| API | Railway project `subscriptions`, service `subscriptions-api` (Serverless) |
-| Data | Neon project `subscriptions`, database `subscriptions` |
+| API | Railway project `finance-subscriptions-api`, service `subscriptions-api` (Serverless) |
+| Data | Neon project `finance-subscriptions-api`, database `subscriptions` |
 | Registry | solo-empire `repository-catalog/registries/online-systems.yaml` (`subscriptions`) |
 
 ## API
