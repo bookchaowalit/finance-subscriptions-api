@@ -47,7 +47,7 @@ class Platform(Protocol):
     def publish(self, token: str, event: dict[str, Any]) -> str: ...
 
 
-def _checked_base(url: str) -> str:
+def checked_url(url: str, name: str = "EMPIRE_PLATFORM_URL") -> str:
     parts = urllib.parse.urlsplit(url)
     host = parts.hostname or ""
     try:
@@ -55,8 +55,12 @@ def _checked_base(url: str) -> str:
     except ValueError:
         loopback = host == "localhost"
     if parts.scheme != "https" and not (parts.scheme == "http" and loopback):
-        raise ValueError("EMPIRE_PLATFORM_URL must be https (http only on loopback)")
+        raise ValueError(f"{name} must be https (http only on loopback)")
     return url.rstrip("/")
+
+
+def _checked_base(url: str) -> str:
+    return checked_url(url)
 
 
 class HttpPlatform:

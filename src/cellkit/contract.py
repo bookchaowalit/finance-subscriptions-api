@@ -6,10 +6,14 @@ They are parametrized over the cell's resources and need the fixtures of
 
 from __future__ import annotations
 
+import json
 import random
+import time
 import uuid
 from typing import Any
 
+import httpx
+import jwt
 import pytest
 
 from cellkit.publisher import publish_pending
@@ -18,7 +22,8 @@ from cellkit.testing import body, sample
 
 __all__ = ["test_lifecycle", "test_executions_are_bound_to_the_record", "test_no_reference_across_workspaces", "test_authorization", "test_workspace_isolation", "test_idempotent_create",
            "test_import_keeps_the_old_id", "test_validation", "test_version_conflict", "test_missing_reference",
-           "test_publisher_delivers_the_outbox", "pytest_generate_tests"]
+           "test_publisher_delivers_the_outbox", "test_jwks_verification", "test_jwks_falls_back_to_the_pinned_key",
+           "pytest_generate_tests"]
 
 
 def pytest_generate_tests(metafunc):
@@ -208,3 +213,78 @@ def test_publisher_delivers_the_outbox(client, owner, harness, platform, resourc
         publish_pending(conn, cell.schema, platform, token, limit=500)
     subjects = {e["subject"] for e in platform.published}
     assert f"empire:{cell.name}:{r.name}:{record['id']}" in subjects
+
+
+def _jwks_pair():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                serialization.NoEncryption()).decode()
+    public = key.public_key().public_bytes(serialization.Encoding.PEM,
+                                           serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+    return private, public, {**jwk, "alg": "RS256", "use": "sig", "kid": uuid.uuid4().hex}
+
+
+def _jwks_token(private: str, audience: str, kid: str | None) -> str:
+    now = int(time.time())
+    claims = {"iss": "empire-platform", "aud": audience, "sub": str(uuid.uuid4()), "ws": str(uuid.uuid4()),
+              "iat": now, "exp": now + 300, "jti": uuid.uuid4().hex}
+    return jwt.encode(claims, private, algorithm="RS256", headers={"kid": kid} if kid else None)
+
+
+def _jwks_client(document: dict, calls: list) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(200, json=document)
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_jwks_verification(harness):
+    from cellkit.auth import JwksKeys, TokenVerifier, Unauthenticated
+
+    aud = harness.cell.audience
+    private, public, jwk = _jwks_pair()
+    other_private, _, other_jwk = _jwks_pair()
+    calls: list = []
+    now = [0.0]
+    keys = JwksKeys("https://platform.test/.well-known/jwks.json", client=_jwks_client({"keys": [jwk]}, calls),
+                    clock=lambda: now[0])
+    only_jwks = TokenVerifier("", "empire-platform", aud, jwks=keys)
+    # kid and kid-less tokens verify against the published key; the set is fetched once and cached
+    assert only_jwks.verify("Bearer " + _jwks_token(private, aud, jwk["kid"]), None).channel == "api"
+    assert only_jwks.verify("Bearer " + _jwks_token(private, aud, None), None)
+    assert len(calls) == 1
+    # an unknown kid refetches at most once a minute and is refused
+    with pytest.raises(Unauthenticated):
+        only_jwks.verify("Bearer " + _jwks_token(other_private, aud, other_jwk["kid"]), None)
+    with pytest.raises(Unauthenticated):
+        only_jwks.verify("Bearer " + _jwks_token(other_private, aud, other_jwk["kid"]), None)
+    assert len(calls) == 1
+    now[0] = 61
+    with pytest.raises(Unauthenticated):
+        only_jwks.verify("Bearer " + _jwks_token(other_private, aud, other_jwk["kid"]), None)
+    assert len(calls) == 2
+    # wrong audience is still refused
+    with pytest.raises(Unauthenticated):
+        only_jwks.verify("Bearer " + _jwks_token(private, "other-api", jwk["kid"]), None)
+
+
+def test_jwks_falls_back_to_the_pinned_key(harness):
+    from cellkit.auth import JwksKeys, TokenVerifier, Unauthenticated
+
+    aud = harness.cell.audience
+    private, public, jwk = _jwks_pair()
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    keys = JwksKeys("https://platform.test/.well-known/jwks.json", client=httpx.Client(transport=httpx.MockTransport(down)))
+    both = TokenVerifier(public, "empire-platform", aud, jwks=keys)
+    assert both.verify("Bearer " + _jwks_token(private, aud, jwk["kid"]), None)
+    assert both.verify("Bearer " + _jwks_token(private, aud, None), None)
+    with pytest.raises(Unauthenticated):
+        TokenVerifier("", "empire-platform", aud, jwks=keys).verify("Bearer " + _jwks_token(private, aud, None), None)

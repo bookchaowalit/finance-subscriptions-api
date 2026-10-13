@@ -32,14 +32,22 @@ def api() -> None:
     env = spec.env
     hosted = os.environ.get(f"{env}_DB_MODE") == "hosted"
     pem = os.environ.get(f"{env}_JWT_PUBLIC_KEY_PEM", "").strip()
+    jwks_url = os.environ.get(f"{env}_JWT_JWKS_URL", "").strip()
     issuer = os.environ.get(f"{env}_JWT_ISSUER", "")
     platform_url = os.environ.get("EMPIRE_PLATFORM_URL", "")
-    if not pem or not issuer or not platform_url:
-        raise SystemExit(f"set {env}_JWT_PUBLIC_KEY_PEM, {env}_JWT_ISSUER and EMPIRE_PLATFORM_URL")
+    if not (pem or jwks_url) or not issuer or not platform_url:
+        raise SystemExit(f"set {env}_JWT_PUBLIC_KEY_PEM or {env}_JWT_JWKS_URL, {env}_JWT_ISSUER and EMPIRE_PLATFORM_URL")
     if hosted and issuer == "empire-platform-dev":
         raise SystemExit("hosted mode refuses the dev issuer")
+    jwks = None
+    if jwks_url:
+        from cellkit.auth import JwksKeys
+        from cellkit.platform import checked_url
+
+        jwks = JwksKeys(checked_url(jwks_url, f"{env}_JWT_JWKS_URL"))
     cluster = default_cluster(spec)
-    app = create_app(spec, lambda: cluster.connect(spec.role("api")), TokenVerifier(pem, issuer, spec.audience),
+    verifier = TokenVerifier(pem, issuer, spec.audience, jwks=jwks)
+    app = create_app(spec, lambda: cluster.connect(spec.role("api")), verifier,
                      HttpPlatform(platform_url),
                      publisher_token=lambda: os.environ.get(f"{env}_PUBLISHER_TOKEN") or None)
     uvicorn.run(app, host=os.environ.get("HOST", "0.0.0.0" if hosted else "127.0.0.1"),
