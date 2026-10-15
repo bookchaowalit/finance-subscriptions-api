@@ -10,6 +10,7 @@ resources:
     - owner_scope
     - provider
     - billing_interval
+    - category
     unique:
     - - name
       - provider
@@ -112,6 +113,15 @@ resources:
       time_saved_hours:
         type: real
         min: 0
+      usage_complete:
+        type: bool
+        default: false
+      hourly_value:
+        type: real
+        min: 0
+      value_currency:
+        type: text
+        max_length: 12
       revenue_attributed:
         type: real
         min: 0
@@ -161,3 +171,86 @@ resources:
       source:
         type: text
         default: subscription-review
+  subscription-usage:
+    plural: subscription-usages
+    filters:
+    - subscription_id
+    - outcome
+    order: used_on
+    fields:
+      subscription_id:
+        type: ref
+        to: subscription
+        required: true
+      used_on:
+        type: date
+        required: true
+      title:
+        type: text
+        required: true
+        max_length: 200
+      outcome:
+        type: enum
+        values: [completed, partial, discarded]
+        default: completed
+      baseline_minutes:
+        type: real
+        min: 0
+      actual_minutes:
+        type: real
+        min: 0
+      rework_minutes:
+        type: real
+        min: 0
+        default: 0
+      task_ref:
+        type: text
+        max_length: 300
+      evidence:
+        type: text
+        max_length: 1500
+      source:
+        type: text
+        max_length: 80
+        default: manual
+      source_ref:
+        type: text
+        max_length: 300
+  subscription-charge:
+    plural: subscription-charges
+    filters:
+    - subscription_id
+    order: paid_on
+    fields:
+      subscription_id:
+        type: ref
+        to: subscription
+        required: true
+      paid_on:
+        type: date
+        required: true
+      period_start:
+        type: date
+        required: true
+      period_end:
+        type: date
+        required: true
+      amount:
+        type: real
+        min: 0
+        required: true
+      currency:
+        type: text
+        required: true
+        max_length: 12
+      evidence:
+        type: text
+        required: true
+        max_length: 1500
+      source:
+        type: text
+        max_length: 80
+        default: manual
+      source_ref:
+        type: text
+        max_length: 300
