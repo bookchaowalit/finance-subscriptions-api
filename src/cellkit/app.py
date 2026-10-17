@@ -43,12 +43,15 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+)
+from fastapi import (
     Request as HttpRequest,
 )
 from fastapi.encoders import jsonable_encoder
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, ConfigDict, Field as PydanticField, create_model
+from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import Field as PydanticField
 
 from cellkit.auth import Principal, TokenVerifier, Unauthenticated
 from cellkit.platform import Action, Denied, Platform, PlatformUnavailable
@@ -155,7 +158,7 @@ def coerce(f: Field | None, raw: str, name: str) -> Any:
         if f.type == "date":
             return date.fromisoformat(raw)
         if f.type == "timestamp":
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return datetime.fromisoformat(raw)
         if f.type == "enum" and raw not in f.values:
             raise ValueError(raw)
         return raw
@@ -445,7 +448,7 @@ def create_app(
             try:
                 with bound(caller) as conn:
                     publish_pending(conn, schema, platform, token, limit=20)
-            except Exception as exc:  # the cron sweep retries
+            except Exception as exc:  # noqa: BLE001 - the cron sweep retries; never fail the request for this
                 log.warning(
                     json.dumps(
                         {

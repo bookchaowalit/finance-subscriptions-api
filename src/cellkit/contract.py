@@ -21,29 +21,29 @@ from cellkit.spec import LEGACY_LIMIT, Cell, Resource
 from cellkit.testing import body, sample
 
 __all__ = [
-    "test_lifecycle",
-    "test_executions_are_bound_to_the_record",
-    "test_no_reference_across_workspaces",
+    "pytest_generate_tests",
     "test_authorization",
-    "test_workspace_isolation",
+    "test_executions_are_bound_to_the_record",
     "test_idempotent_create",
     "test_import_keeps_the_old_id",
+    "test_jwks_falls_back_to_the_pinned_key",
+    "test_jwks_verification",
+    "test_lifecycle",
+    "test_missing_reference",
+    "test_no_reference_across_workspaces",
+    "test_publisher_delivers_the_outbox",
     "test_validation",
     "test_version_conflict",
-    "test_missing_reference",
-    "test_publisher_delivers_the_outbox",
-    "test_jwks_verification",
-    "test_jwks_falls_back_to_the_pinned_key",
-    "pytest_generate_tests",
+    "test_workspace_isolation",
 ]
 
 
 def pytest_generate_tests(metafunc):
     if "resource" in metafunc.fixturenames:
-        from cellkit.testing import spec_from
-
         import os
         from pathlib import Path
+
+        from cellkit.testing import spec_from
 
         cell = spec_from(
             Path(os.environ.get("CELLKIT_ROOT") or metafunc.config.rootpath)
@@ -413,7 +413,7 @@ def test_jwks_verification(harness):
     from cellkit.auth import JwksKeys, TokenVerifier, Unauthenticated
 
     aud = harness.cell.audience
-    private, public, jwk = _jwks_pair()
+    private, _public, jwk = _jwks_pair()
     other_private, _, other_jwk = _jwks_pair()
     calls: list = []
     now = [0.0]

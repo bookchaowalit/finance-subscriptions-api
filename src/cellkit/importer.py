@@ -21,7 +21,7 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,9 +42,7 @@ def convert(f: Field, value: Any) -> Any:
     if f.type == "timestamp":
         text = str(value).replace("T", " ")
         parsed = datetime.fromisoformat(text)
-        return (
-            parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        ).isoformat()
+        return (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).isoformat()
     if f.type == "date":
         return str(value)[:10]
     if f.type == "json" and isinstance(value, str):
@@ -60,9 +58,7 @@ def stamp(value: Any) -> str | None:
     if value is None:
         return None
     parsed = datetime.fromisoformat(str(value).replace("T", " "))
-    return (
-        parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    ).isoformat()
+    return (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).isoformat()
 
 
 def rows_of(conn: sqlite3.Connection, r: Resource) -> list[dict[str, Any]]:

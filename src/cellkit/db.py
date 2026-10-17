@@ -181,7 +181,7 @@ class HostedCluster:
     urls: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_env(cls, names: Names) -> "HostedCluster":
+    def from_env(cls, names: Names) -> HostedCluster:
         prefix = f"{names.cell.env}_DB_URL_"
         urls: dict[str, str] = {}
         path = names.secrets_file

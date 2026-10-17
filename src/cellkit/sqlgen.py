@@ -94,8 +94,10 @@ def table(cell: Cell, r: Resource) -> str:
         )
     out = [
         f"CREATE TABLE {s}.{r.table} (\n    " + ",\n    ".join(lines) + "\n);",
-        f"CREATE UNIQUE INDEX {r.table}_legacy ON {s}.{r.table} (workspace_id, legacy_id)"
-        " WHERE legacy_id IS NOT NULL;",
+        (
+            f"CREATE UNIQUE INDEX {r.table}_legacy ON {s}.{r.table} (workspace_id, legacy_id)"
+            " WHERE legacy_id IS NOT NULL;"
+        ),
     ]
     indexed = {f.name for f in r.refs} | set(r.filters)
     for name in sorted(indexed):

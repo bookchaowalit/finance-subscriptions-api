@@ -10,12 +10,8 @@ Needs ``<CELL>_PUBLISHER_TOKEN`` (a delegated automation token with
 
 from __future__ import annotations
 
-import argparse
-import json
-import os
-import sys
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -63,15 +59,13 @@ def publish_pending(
         }
         try:
             platform.publish(token, event)
-        except (
-            Exception
-        ) as exc:  # retry later with backoff; only the error class is kept
+        except Exception as exc:  # noqa: BLE001 - any publish failure is retried with backoff; only the error class is kept
             delay = min(MAX_BACKOFF_SECONDS, 5 * 2 ** min(row["attempts"], 10))
             conn.execute(
                 f"UPDATE {schema}.outbox SET attempts = attempts + 1, next_attempt_at = %s, last_error = %s"
                 " WHERE id = %s",
                 (
-                    datetime.now(timezone.utc) + timedelta(seconds=delay),
+                    datetime.now(UTC) + timedelta(seconds=delay),
                     type(exc).__name__,
                     row["id"],
                 ),
