@@ -23,6 +23,7 @@ MAX_BACKOFF_SECONDS = 600
 
 def token_workspace(token: str) -> str:
     """The workspace a publisher token is for (read only to choose rows; the platform verifies the token)."""
+    # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode -- reads only the routing claim (ws) of our own publisher token to pick rows; the platform verifies the signature
     return str(uuid.UUID(jwt.decode(token, options={"verify_signature": False})["ws"]))
 
 
