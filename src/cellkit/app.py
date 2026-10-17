@@ -158,7 +158,7 @@ def coerce(f: Field | None, raw: str, name: str) -> Any:
         if f.type == "date":
             return date.fromisoformat(raw)
         if f.type == "timestamp":
-            return datetime.fromisoformat(raw)
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))  # noqa: FURB162 - keeps Z-normalisation; removing it changes which inputs are accepted
         if f.type == "enum" and raw not in f.values:
             raise ValueError(raw)
         return raw
