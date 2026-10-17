@@ -43,8 +43,16 @@ class JwksKeys:
     A fetch failure keeps the last good keys, so a platform outage never empties the cache.
     """
 
-    def __init__(self, url: str, *, ttl: float = 600, min_refresh: float = 60, timeout: float = 5.0,
-                 client: httpx.Client | None = None, clock=time.monotonic) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        ttl: float = 600,
+        min_refresh: float = 60,
+        timeout: float = 5.0,
+        client: httpx.Client | None = None,
+        clock=time.monotonic,
+    ) -> None:
         self.url = url
         self.ttl, self.min_refresh = ttl, min_refresh
         self.client = client or httpx.Client(timeout=timeout, follow_redirects=False)
@@ -60,8 +68,14 @@ class JwksKeys:
             response.raise_for_status()
             keys = {}
             for jwk in response.json().get("keys", []):
-                if jwk.get("kty") == "RSA" and jwk.get("use", "sig") == "sig" and jwk.get("alg", "RS256") == "RS256":
-                    keys[str(jwk.get("kid", ""))] = jwt.PyJWK(jwk, algorithm="RS256").key
+                if (
+                    jwk.get("kty") == "RSA"
+                    and jwk.get("use", "sig") == "sig"
+                    and jwk.get("alg", "RS256") == "RS256"
+                ):
+                    keys[str(jwk.get("kid", ""))] = jwt.PyJWK(
+                        jwk, algorithm="RS256"
+                    ).key
         except (httpx.HTTPError, ValueError, TypeError, AttributeError, jwt.PyJWKError):
             return
         if keys:
@@ -74,11 +88,15 @@ class JwksKeys:
             return []
         with self._lock:
             age = self.clock() - self._fetched
-            if age >= self.ttl or (kid is not None and kid not in self._keys and age >= self.min_refresh):
+            if age >= self.ttl or (
+                kid is not None and kid not in self._keys and age >= self.min_refresh
+            ):
                 self._refresh()
             if kid is not None:
                 return [self._keys[kid]] if kid in self._keys else []
-            return list(self._keys.values())  # tokens minted before kid headers: try every published key
+            return list(
+                self._keys.values()
+            )  # tokens minted before kid headers: try every published key
 
 
 @dataclass(frozen=True)
@@ -103,8 +121,14 @@ class TokenVerifier:
         return self._decode_with(token, keys[-1])
 
     def _decode_with(self, token: str, key: Any) -> dict[str, Any]:
-        return jwt.decode(token, key, algorithms=["RS256"], audience=self.audience,
-                          issuer=self.issuer, options={"require": ["exp", "iat", "sub", "jti"]})
+        return jwt.decode(
+            token,
+            key,
+            algorithms=["RS256"],
+            audience=self.audience,
+            issuer=self.issuer,
+            options={"require": ["exp", "iat", "sub", "jti"]},
+        )
 
     def verify(self, authorization: str | None, channel: str | None) -> Principal:
         if not authorization or not authorization.startswith("Bearer "):
@@ -113,7 +137,11 @@ class TokenVerifier:
         try:
             claims = self._decode(token)
             lifetime = claims["exp"] - claims["iat"]
-            limit = self.max_lifetime if claims.get("del") else min(self.max_lifetime, MAX_LIFETIME_SECONDS)
+            limit = (
+                self.max_lifetime
+                if claims.get("del")
+                else min(self.max_lifetime, MAX_LIFETIME_SECONDS)
+            )
             if lifetime > limit:
                 raise Unauthenticated("token lifetime too long")
             actor = uuid.UUID(claims["sub"])
@@ -126,4 +154,10 @@ class TokenVerifier:
         channel = channel or "api"
         if channel not in CHANNELS:
             raise Unauthenticated("unknown channel")
-        return Principal(actor=actor, workspace=workspace, delegation=delegation, channel=channel, token=token)
+        return Principal(
+            actor=actor,
+            workspace=workspace,
+            delegation=delegation,
+            channel=channel,
+            token=token,
+        )

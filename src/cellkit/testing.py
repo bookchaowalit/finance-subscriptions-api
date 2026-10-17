@@ -60,11 +60,17 @@ class FakePlatform:
             execution = self.keys[idempotency_key]
             return execution, True, self.executions[execution]["status"]
         for needed in [action.action, *(also or [])]:
-            if not self.decide(token, channel, Action(needed, action.resource_type, action.resource_id)):
+            if not self.decide(
+                token, channel, Action(needed, action.resource_type, action.resource_id)
+            ):
                 raise Denied(403, "deny", "no_permission")
         execution = uuid.uuid4()
-        self.executions[execution] = {"permission": action.action, "bound_to": action.resource_id, "status": "running",
-                                      "actor": self._actor(token)}
+        self.executions[execution] = {
+            "permission": action.action,
+            "bound_to": action.resource_id,
+            "status": "running",
+            "actor": self._actor(token),
+        }
         if idempotency_key:
             self.keys[idempotency_key] = execution
         return execution, False, "running"
@@ -107,7 +113,9 @@ def sample(f: Field, n: int = 0) -> Any:
     raise ValueError(f.type)
 
 
-def body(r: Resource, refs: dict[str, int], n: int = 0, *, everything: bool = False) -> dict[str, Any]:
+def body(
+    r: Resource, refs: dict[str, int], n: int = 0, *, everything: bool = False
+) -> dict[str, Any]:
     """A create body: required fields (all fields with ``everything``), refs pointing at ``refs[target]``."""
     out: dict[str, Any] = {}
     for f in r.fields:
@@ -128,16 +136,33 @@ class Harness:
     private_key: str
     public_key: str
 
-    def token(self, sub: uuid.UUID, ws: uuid.UUID, *, ttl: int = 600, audience: Any = None) -> dict[str, str]:
+    def token(
+        self, sub: uuid.UUID, ws: uuid.UUID, *, ttl: int = 600, audience: Any = None
+    ) -> dict[str, str]:
         now = int(time.time())
         aud = audience or [self.cell.audience, "platform-api"]
-        claims = {"iss": ISSUER, "aud": aud, "sub": str(sub), "ws": str(ws), "iat": now, "exp": now + ttl,
-                  "jti": uuid.uuid4().hex}
-        return {"Authorization": f"Bearer {jwt.encode(claims, self.private_key, algorithm='RS256')}"}
+        claims = {
+            "iss": ISSUER,
+            "aud": aud,
+            "sub": str(sub),
+            "ws": str(ws),
+            "iat": now,
+            "exp": now + ttl,
+            "jti": uuid.uuid4().hex,
+        }
+        return {
+            "Authorization": f"Bearer {jwt.encode(claims, self.private_key, algorithm='RS256')}"
+        }
 
     def client(self, platform: FakePlatform) -> TestClient:
-        return TestClient(create_app(self.cell, lambda: self.cluster.connect(self.cell.role("api")),
-                                     TokenVerifier(self.public_key, ISSUER, self.cell.audience), platform))
+        return TestClient(
+            create_app(
+                self.cell,
+                lambda: self.cluster.connect(self.cell.role("api")),
+                TokenVerifier(self.public_key, ISSUER, self.cell.audience),
+                platform,
+            )
+        )
 
     def superuser(self, query: str, params: tuple = ()) -> list[tuple]:
         with self.cluster.connect("postgres", self.cell.schema) as conn:
@@ -154,10 +179,18 @@ def harness(request) -> Iterator[Harness]:
     cluster.init()
     cluster.start()
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                serialization.NoEncryption()).decode()
-    public = key.public_key().public_bytes(serialization.Encoding.PEM,
-                                           serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    private = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public = (
+        key.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        .decode()
+    )
     try:
         cluster.bootstrap()
         migrate(cluster)

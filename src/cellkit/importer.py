@@ -34,11 +34,17 @@ def convert(f: Field, value: Any) -> Any:
     if value is None:
         return None
     if f.type == "bool":
-        return bool(int(value)) if isinstance(value, (int, str)) and str(value) in ("0", "1") else bool(value)
+        return (
+            bool(int(value))
+            if isinstance(value, (int, str)) and str(value) in ("0", "1")
+            else bool(value)
+        )
     if f.type == "timestamp":
         text = str(value).replace("T", " ")
         parsed = datetime.fromisoformat(text)
-        return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).isoformat()
+        return (
+            parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        ).isoformat()
     if f.type == "date":
         return str(value)[:10]
     if f.type == "json" and isinstance(value, str):
@@ -54,13 +60,20 @@ def stamp(value: Any) -> str | None:
     if value is None:
         return None
     parsed = datetime.fromisoformat(str(value).replace("T", " "))
-    return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).isoformat()
+    return (
+        parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    ).isoformat()
 
 
 def rows_of(conn: sqlite3.Connection, r: Resource) -> list[dict[str, Any]]:
     table = r.legacy_table or r.table
     conn.row_factory = sqlite3.Row
-    return [dict(row) for row in conn.execute(f'SELECT * FROM "{table}" ORDER BY "{r.legacy_id_from}"')]
+    return [
+        dict(row)
+        for row in conn.execute(
+            f'SELECT * FROM "{table}" ORDER BY "{r.legacy_id_from}"'
+        )
+    ]
 
 
 def parents_first(r: Resource, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -87,8 +100,9 @@ def parents_first(r: Resource, rows: list[dict[str, Any]]) -> list[dict[str, Any
     return out
 
 
-def body_of(r: Resource, row: dict[str, Any], created: set[int] | None = None
-            ) -> tuple[dict[str, Any], dict[str, Any]]:
+def body_of(
+    r: Resource, row: dict[str, Any], created: set[int] | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """(create body, self-refs for the second pass: only those whose target is not created yet)."""
     rewrites = {name: dict(mapping) for name, mapping in r.legacy_values}
     out: dict[str, Any] = {"legacy_id": int(row[r.legacy_id_from])}
@@ -112,10 +126,21 @@ def body_of(r: Resource, row: dict[str, Any], created: set[int] | None = None
     return out, later
 
 
-def run(cell: Cell, sqlite_path: Path, api: str, token: str, *, dry_run: bool = False,
-        client: httpx.Client | None = None) -> dict[str, dict[str, int]]:
-    http = client or httpx.Client(base_url=api.rstrip("/"), timeout=60, follow_redirects=False,
-                                  headers={"Authorization": f"Bearer {token}", "X-Empire-Channel": "cli"})
+def run(
+    cell: Cell,
+    sqlite_path: Path,
+    api: str,
+    token: str,
+    *,
+    dry_run: bool = False,
+    client: httpx.Client | None = None,
+) -> dict[str, dict[str, int]]:
+    http = client or httpx.Client(
+        base_url=api.rstrip("/"),
+        timeout=60,
+        follow_redirects=False,
+        headers={"Authorization": f"Bearer {token}", "X-Empire-Channel": "cli"},
+    )
     conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
     report: dict[str, dict[str, int]] = {}
     for r in cell.ordered():
@@ -133,27 +158,42 @@ def run(cell: Cell, sqlite_path: Path, api: str, token: str, *, dry_run: bool = 
             response = http.post(f"/v1/{r.plural}", json=payload)
             if response.status_code == 201:
                 counts["created"] += 1
-            elif response.status_code == 409 and http.get(f"/v1/{r.plural}/legacy/{payload['legacy_id']}"
-                                                           ).status_code == 200:
+            elif (
+                response.status_code == 409
+                and http.get(
+                    f"/v1/{r.plural}/legacy/{payload['legacy_id']}"
+                ).status_code
+                == 200
+            ):
                 counts["existing"] += 1
             else:
-                raise SystemExit(f"{r.name} legacy_id={payload['legacy_id']}: HTTP {response.status_code}"
-                                 f" {response.text[:300]}")
+                raise SystemExit(
+                    f"{r.name} legacy_id={payload['legacy_id']}: HTTP {response.status_code}"
+                    f" {response.text[:300]}"
+                )
         for legacy_id, refs in second:
             if dry_run:
                 continue
             response = http.patch(f"/v1/{r.plural}/{legacy_id}", json=refs)
             if response.status_code != 200:
-                raise SystemExit(f"{r.name} {legacy_id} refs: HTTP {response.status_code} {response.text[:300]}")
+                raise SystemExit(
+                    f"{r.name} {legacy_id} refs: HTTP {response.status_code} {response.text[:300]}"
+                )
             counts["linked"] += 1
         report[r.name] = counts
     return report
 
 
-def verify(cell: Cell, sqlite_path: Path, api: str, token: str) -> dict[str, dict[str, int]]:
+def verify(
+    cell: Cell, sqlite_path: Path, api: str, token: str
+) -> dict[str, dict[str, int]]:
     """Old rows vs rows in the cell, per resource, by legacy id."""
-    http = httpx.Client(base_url=api.rstrip("/"), timeout=60, follow_redirects=False,
-                        headers={"Authorization": f"Bearer {token}", "X-Empire-Channel": "cli"})
+    http = httpx.Client(
+        base_url=api.rstrip("/"),
+        timeout=60,
+        follow_redirects=False,
+        headers={"Authorization": f"Bearer {token}", "X-Empire-Channel": "cli"},
+    )
     conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
     out = {}
     for r in cell.resources:
@@ -161,28 +201,44 @@ def verify(cell: Cell, sqlite_path: Path, api: str, token: str) -> dict[str, dic
         new: set[int] = set()
         after = 0
         while True:
-            page = http.get(f"/v1/{r.plural}", params={"limit": 1000, "after_id": after}).json()["items"]
+            page = http.get(
+                f"/v1/{r.plural}", params={"limit": 1000, "after_id": after}
+            ).json()["items"]
             new |= {item["legacy_id"] for item in page if item["legacy_id"] is not None}
             if len(page) < 1000:
                 break
             after = page[-1]["id"]
-        out[r.name] = {"old": len(old), "imported": len(old & new), "missing": len(old - new)}
+        out[r.name] = {
+            "old": len(old),
+            "imported": len(old & new),
+            "missing": len(old - new),
+        }
     return out
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="cellkit-import", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        prog="cellkit-import", description=__doc__.splitlines()[0]
+    )
     parser.add_argument("cell_dir", type=Path)
     parser.add_argument("--sqlite", type=Path, required=True)
     parser.add_argument("--api", required=True)
     parser.add_argument("--token-file", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--verify", action="store_true", help="only compare old and imported rows")
+    parser.add_argument(
+        "--verify", action="store_true", help="only compare old and imported rows"
+    )
     args = parser.parse_args(argv)
     from urllib.parse import urlsplit
 
     parts = urlsplit(args.api)
-    if not (parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in ("127.0.0.1", "::1", "localhost"))):
+    if not (
+        parts.scheme == "https"
+        or (
+            parts.scheme == "http"
+            and parts.hostname in ("127.0.0.1", "::1", "localhost")
+        )
+    ):
         raise SystemExit("--api must be https (http only on loopback)")
     cell = load(args.cell_dir / "cell.yaml")
     token = args.token_file.read_text(encoding="utf-8").strip()
@@ -190,7 +246,11 @@ def main(argv: list[str] | None = None) -> int:
         report = verify(cell, args.sqlite, args.api, token)
         print(json.dumps(report, indent=1))
         return 1 if any(v["missing"] for v in report.values()) else 0
-    print(json.dumps(run(cell, args.sqlite, args.api, token, dry_run=args.dry_run), indent=1))
+    print(
+        json.dumps(
+            run(cell, args.sqlite, args.api, token, dry_run=args.dry_run), indent=1
+        )
+    )
     return 0
 
 

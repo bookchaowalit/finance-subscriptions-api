@@ -39,10 +39,19 @@ class Action:
 class Platform(Protocol):
     def decide(self, token: str, channel: str, action: Action) -> bool: ...
 
-    def begin(self, token: str, channel: str, action: Action, idempotency_key: str | None,
-              correlation_id: str | None, also: list[str] | None = None) -> tuple[uuid.UUID, bool, str]: ...
+    def begin(
+        self,
+        token: str,
+        channel: str,
+        action: Action,
+        idempotency_key: str | None,
+        correlation_id: str | None,
+        also: list[str] | None = None,
+    ) -> tuple[uuid.UUID, bool, str]: ...
 
-    def finish(self, token: str, channel: str, execution: uuid.UUID, outcome: dict[str, Any]) -> None: ...
+    def finish(
+        self, token: str, channel: str, execution: uuid.UUID, outcome: dict[str, Any]
+    ) -> None: ...
 
     def publish(self, token: str, event: dict[str, Any]) -> str: ...
 
@@ -64,21 +73,34 @@ def _checked_base(url: str) -> str:
 
 
 class HttpPlatform:
-    def __init__(self, base_url: str, timeout: float = 10.0, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self, base_url: str, timeout: float = 10.0, client: httpx.Client | None = None
+    ) -> None:
         self.base = _checked_base(base_url)
         self.client = client or httpx.Client(timeout=timeout, follow_redirects=False)
 
-    def _post(self, path: str, token: str, channel: str, body: dict[str, Any]) -> httpx.Response:
+    def _post(
+        self, path: str, token: str, channel: str, body: dict[str, Any]
+    ) -> httpx.Response:
         try:
-            return self.client.post(f"{self.base}{path}", json=body, headers={
-                "Authorization": f"Bearer {token}", "X-Empire-Channel": channel})
+            return self.client.post(
+                f"{self.base}{path}",
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Empire-Channel": channel,
+                },
+            )
         except httpx.HTTPError as exc:
             raise PlatformUnavailable(type(exc).__name__) from None
 
     @staticmethod
     def _body(action: Action) -> dict[str, Any]:
-        body: dict[str, Any] = {"action": action.action, "resource_type": action.resource_type,
-                                "resource_id": action.resource_id}
+        body: dict[str, Any] = {
+            "action": action.action,
+            "resource_type": action.resource_type,
+            "resource_id": action.resource_id,
+        }
         if action.approval_id:
             body["approval_id"] = str(action.approval_id)
         return body
@@ -91,8 +113,15 @@ class HttpPlatform:
             raise PlatformUnavailable(f"decide {response.status_code}")
         return response.json().get("decision") == "allow"
 
-    def begin(self, token: str, channel: str, action: Action, idempotency_key: str | None,
-              correlation_id: str | None, also: list[str] | None = None) -> tuple[uuid.UUID, bool, str]:
+    def begin(
+        self,
+        token: str,
+        channel: str,
+        action: Action,
+        idempotency_key: str | None,
+        correlation_id: str | None,
+        also: list[str] | None = None,
+    ) -> tuple[uuid.UUID, bool, str]:
         """(execution, replayed, status); every permission in ``action`` and ``also`` is enforced together."""
         body = self._body(action)
         if also:
@@ -104,14 +133,26 @@ class HttpPlatform:
         response = self._post("/v1/executions", token, channel, body)
         if response.status_code in (401, 403, 409):
             detail = response.json().get("detail", {}) if response.content else {}
-            raise Denied(response.status_code, str(detail.get("error", "deny")), str(detail.get("reason", "")))
+            raise Denied(
+                response.status_code,
+                str(detail.get("error", "deny")),
+                str(detail.get("reason", "")),
+            )
         if response.status_code != 201:
             raise PlatformUnavailable(f"begin {response.status_code}")
         data = response.json()
-        return uuid.UUID(data["execution_id"]), bool(data.get("replayed")), str(data.get("status", "running"))
+        return (
+            uuid.UUID(data["execution_id"]),
+            bool(data.get("replayed")),
+            str(data.get("status", "running")),
+        )
 
-    def finish(self, token: str, channel: str, execution: uuid.UUID, outcome: dict[str, Any]) -> None:
-        response = self._post(f"/v1/executions/{execution}/finish", token, channel, outcome)
+    def finish(
+        self, token: str, channel: str, execution: uuid.UUID, outcome: dict[str, Any]
+    ) -> None:
+        response = self._post(
+            f"/v1/executions/{execution}/finish", token, channel, outcome
+        )
         if response.status_code != 200:
             raise PlatformUnavailable(f"finish {response.status_code}")
 
