@@ -17,7 +17,7 @@
 - `subscriptions-mcp` (stdio, see `.mcp.json`) is this cell's MCP server: tools `subscriptions.<resource>.list|get|create|update|delete`
   call the cell API with the caller's token (`EMPIRE_TOKEN`, `EMPIRE_TOKEN_FILE` or the `owner-mcp` automation token;
   URL from `EMPIRE_SUBSCRIPTIONS_API`). Set `EMPIRE_MCP_READONLY=1` for list/get only. Never add actor, workspace or token arguments.
-- Deploys are manual (`railway up`) and change production; verify `/health` and one
-  authorized read afterwards.
+- Merging to `main` deploys production (Railway GitHub source + Wait for CI); verify `/health`
+  and one authorized read afterwards. Do not `railway up` from a working tree.
 - Keep the solo-empire registry entry (`subscriptions` in
   `repository-catalog/registries/online-systems.yaml`) in sync.
