@@ -53,6 +53,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, create_model
 from pydantic import Field as PydanticField
 
+from cellkit._sentry import capture
 from cellkit.auth import Principal, TokenVerifier, Unauthenticated
 from cellkit.platform import Action, Denied, Platform, PlatformUnavailable
 from cellkit.publisher import publish_pending
@@ -384,7 +385,8 @@ def create_app(
                 execution,
                 {"status": "succeeded", "service": cell.name, **plan.audit},
             )
-        except (PlatformUnavailable, Denied):
+        except (PlatformUnavailable, Denied) as exc:
+            capture(exc)  # the write succeeded; only the audit finish failed
             log.warning(
                 json.dumps(
                     {"event": f"{cell.name}.finish_failed", "execution": str(execution)}
@@ -450,6 +452,7 @@ def create_app(
                 with bound(caller) as conn:
                     publish_pending(conn, schema, platform, token, limit=20)
             except Exception as exc:  # noqa: BLE001 - the cron sweep retries; never fail the request for this
+                capture(exc)
                 log.warning(
                     json.dumps(
                         {
