@@ -32,5 +32,6 @@ npm install && railway config apply && railway up --ci --service subscriptions-a
 railway scale --service subscriptions-api asia-southeast1-eqsg3a=1 us-east4-eqdc4a=0   # next to Neon and the platform
 ```
 
-Railway variables: `SUBSCRIPTIONS_DB_MODE=hosted`, `SUBSCRIPTIONS_DB_URL_API`,
+Railway variables: `SENTRY_DSN` (error reporting; unset = off, see `src/cellkit/_sentry.py`),
+`SUBSCRIPTIONS_DB_MODE=hosted`, `SUBSCRIPTIONS_DB_URL_API`,
 `SUBSCRIPTIONS_JWT_PUBLIC_KEY_PEM`, `SUBSCRIPTIONS_JWT_ISSUER`, `EMPIRE_PLATFORM_URL`.
