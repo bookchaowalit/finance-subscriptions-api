@@ -88,6 +88,8 @@ resources:
     unique:
     - - subscription_id
       - review_date
+    ranges:
+    - [period_start, period_end]
     order: review_date
     fields:
       subscription_id:

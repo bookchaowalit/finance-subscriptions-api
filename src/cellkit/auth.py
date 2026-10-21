@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -51,7 +52,7 @@ class JwksKeys:
         min_refresh: float = 60,
         timeout: float = 5.0,
         client: httpx.Client | None = None,
-        clock=time.monotonic,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.url = url
         self.ttl, self.min_refresh = ttl, min_refresh

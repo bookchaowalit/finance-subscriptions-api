@@ -26,12 +26,15 @@ __all__ = [
     "test_executions_are_bound_to_the_record",
     "test_idempotent_create",
     "test_import_keeps_the_old_id",
+    "test_inline_publish_failure_is_reported",
     "test_jwks_falls_back_to_the_pinned_key",
     "test_jwks_verification",
     "test_lifecycle",
     "test_missing_reference",
     "test_no_reference_across_workspaces",
     "test_publisher_delivers_the_outbox",
+    "test_ranges_keep_start_before_end",
+    "test_spec_refuses_bad_ranges",
     "test_validation",
     "test_version_conflict",
     "test_workspace_isolation",
@@ -67,7 +70,9 @@ def make(
     refs = {}
     for f in r.refs:
         if (f.required or everything) and f.to != r.name and f.name not in extra:
-            refs[f.to] = make(client, headers, cell, cell.resource(f.to), n)["id"]
+            refs[f.target] = make(client, headers, cell, cell.resource(f.target), n)[
+                "id"
+            ]
     payload = {**body(r, refs, n, everything=everything), **extra}
     response = client.post(f"/v1/{r.plural}", json=payload, headers=headers)
     assert response.status_code == 201, response.text
@@ -77,7 +82,8 @@ def make(
 def test_lifecycle(client, owner, harness, resource):
     cell, r = harness.cell, resource
     record = make(client, owner, cell, r, everything=True)
-    assert record["version"] == 1 and record["id"] >= LEGACY_LIMIT
+    assert record["version"] == 1
+    assert record["id"] >= LEGACY_LIMIT
     path = f"/v1/{r.plural}/{record['id']}"
     assert client.get(path, headers=owner).json() == record
     for name in r.filters:
@@ -95,7 +101,7 @@ def test_lifecycle(client, owner, harness, resource):
         f"/v1/{r.plural}", headers=owner, params={"id": record["id"]}
     ).json()["items"]
     assert [item["id"] for item in by_id] == [record["id"]]
-    editable = next((f for f in r.fields if f.type not in ("ref",)), None)
+    editable = next((f for f in r.fields if f.type != "ref"), None)
     if editable is not None:
         new_value = sample(editable, 1)
         changed = client.patch(path, headers=owner, json={editable.name: new_value})
@@ -122,10 +128,8 @@ def test_lifecycle(client, owner, harness, resource):
             f"SELECT type FROM {cell.schema}.outbox WHERE subject = %s ORDER BY occurred_at",
             (f"empire:{cell.name}:{r.name}:{record['id']}",),
         )
-        assert (
-            types[0][0] == f"{cell.name}.{r.name}.created"
-            and types[-1][0] == f"{cell.name}.{r.name}.deleted"
-        )
+        assert types[0][0] == f"{cell.name}.{r.name}.created"
+        assert types[-1][0] == f"{cell.name}.{r.name}.deleted"
 
 
 def test_executions_are_bound_to_the_record(client, owner, harness, platform, resource):
@@ -258,7 +262,8 @@ def test_import_keeps_the_old_id(client, owner, harness, resource):
     cell, r = harness.cell, resource
     legacy = random.randint(1, LEGACY_LIMIT - 1)
     record = make(client, owner, cell, r, legacy_id=legacy)
-    assert record["id"] == legacy and record["legacy_id"] == legacy
+    assert record["id"] == legacy
+    assert record["legacy_id"] == legacy
     assert (
         client.get(f"/v1/{r.plural}/legacy/{legacy}", headers=owner).json()["id"]
         == legacy
@@ -326,10 +331,8 @@ def test_version_conflict(client, owner, harness, resource):
     stale = client.patch(
         f"/v1/{r.plural}/{record['id']}", headers=owner, json={"expected_version": 99}
     )
-    assert (
-        stale.status_code == 409
-        and stale.json()["detail"]["version"] == record["version"]
-    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["version"] == record["version"]
 
 
 def test_missing_reference(client, owner, harness, resource):
@@ -358,6 +361,105 @@ def test_publisher_delivers_the_outbox(client, owner, harness, platform, resourc
         publish_pending(conn, cell.schema, platform, token, limit=500)
     subjects = {e["subject"] for e in platform.published}
     assert f"empire:{cell.name}:{r.name}:{record['id']}" in subjects
+
+
+def test_inline_publish_failure_is_reported(
+    harness, platform, owner, resource, monkeypatch
+):
+    """A failed inline publish keeps the request successful (the cron sweep retries) but reaches Sentry."""
+    from fastapi.testclient import TestClient
+
+    from cellkit import app as app_module
+    from cellkit.auth import TokenVerifier
+    from cellkit.testing import ISSUER
+
+    cell, r = harness.cell, resource
+    if r.graph is None:
+        pytest.skip("no graph events")
+    captured: list[BaseException] = []
+    monkeypatch.setattr(app_module, "capture", captured.append)
+
+    def broken(*_args: Any, **_kwargs: Any) -> dict[str, int]:
+        raise RuntimeError("publisher down")
+
+    monkeypatch.setattr(app_module, "publish_pending", broken)
+    token = owner["Authorization"].removeprefix("Bearer ")
+    client = TestClient(
+        app_module.create_app(
+            cell,
+            lambda: harness.cluster.connect(cell.role("api")),
+            TokenVerifier(harness.public_key, ISSUER, cell.audience),
+            platform,
+            publisher_token=lambda: token,
+        )
+    )
+    make(client, owner, cell, r)
+    # One capture per write that publishes (make() also creates the records it refers to).
+    assert captured
+    assert {type(exc) for exc in captured} == {RuntimeError}
+
+
+_LOW_HIGH: dict[str, tuple[Any, Any]] = {
+    "date": ("2026-01-01", "2026-02-01"),
+    "timestamp": ("2026-01-01T08:00:00+00:00", "2026-01-01T09:00:00+00:00"),
+    "int": (1, 2),
+    "bigint": (1, 2),
+    "real": (1.0, 2.0),
+}
+
+
+def test_ranges_keep_start_before_end(client, owner, harness, resource):
+    cell, r = harness.cell, resource
+    if not r.ranges:
+        pytest.skip("no ranges")
+    refs = {
+        f.target: make(client, owner, cell, cell.resource(f.target))["id"]
+        for f in r.refs
+        if f.required
+    }
+    for n, (start, end) in enumerate(r.ranges):
+        low, high = _LOW_HIGH[r.field(start).type]
+        payload = {**body(r, refs, 100 + n), start: high, end: low}
+        refused = client.post(f"/v1/{r.plural}", json=payload, headers=owner)
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["detail"] == {
+            "error": "invalid_value",
+            "fields": sorted({start, end}),
+        }
+        record = make(client, owner, cell, r, 200 + n, **{start: low, end: low})
+        path = f"/v1/{r.plural}/{record['id']}"
+        assert client.patch(path, headers=owner, json={end: high}).status_code == 200
+        moved = client.patch(path, headers=owner, json={start: high, end: low})
+        assert moved.status_code == 422, moved.text
+        assert client.get(path, headers=owner).json()["version"] == 2
+        # A row stored before the rule existed may already be inverted: resending its own values
+        # (a no-op) is accepted, only a patch that changes a range field is checked.
+        harness.superuser(
+            f"UPDATE {cell.schema}.{r.table} SET {start} = %s, {end} = %s WHERE id = %s RETURNING id",
+            (high, low, record["id"]),
+        )
+        resent = client.patch(path, headers=owner, json={start: high, end: low})
+        assert resent.status_code == 200, resent.text
+
+
+def test_spec_refuses_bad_ranges():
+    from cellkit.spec import SpecError, parse
+
+    fields = {"a": {"type": "date"}, "b": {"type": "date"}, "c": {"type": "text"}}
+    for ranges in ([["a"]], [["a", "missing"]], [["a", "c"]], ["ab"]):
+        spec = {
+            "cell": "demo",
+            "resources": {"item": {"fields": fields, "ranges": ranges}},
+        }
+        with pytest.raises(SpecError):
+            parse(spec)
+    ok = parse(
+        {
+            "cell": "demo",
+            "resources": {"item": {"fields": fields, "ranges": [["a", "b"]]}},
+        }
+    )
+    assert ok.resource("item").ranges == (("a", "b"),)
 
 
 def _jwks_pair():

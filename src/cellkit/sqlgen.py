@@ -88,7 +88,7 @@ def table(cell: Cell, r: Resource) -> str:
     for combo in r.unique:
         lines.append(f"UNIQUE (workspace_id, {', '.join(combo)})")
     for f in r.refs:
-        target = cell.resource(f.to)
+        target = cell.resource(f.target)
         lines.append(
             f"FOREIGN KEY (workspace_id, {f.name}) REFERENCES {s}.{target.table} (workspace_id, id)"
         )
@@ -100,10 +100,10 @@ def table(cell: Cell, r: Resource) -> str:
         ),
     ]
     indexed = {f.name for f in r.refs} | set(r.filters)
-    for name in sorted(indexed):
-        out.append(
-            f"CREATE INDEX {r.table}_{name} ON {s}.{r.table} (workspace_id, {name});"
-        )
+    out.extend(
+        f"CREATE INDEX {r.table}_{name} ON {s}.{r.table} (workspace_id, {name});"
+        for name in sorted(indexed)
+    )
     return "\n".join(out)
 
 

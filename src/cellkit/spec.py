@@ -8,6 +8,8 @@ environment variable names. Names follow the platform's rules:
 - permissions are ``<cell>.<resource>:read|write|delete``;
 - graph events are ``<cell>.<resource>.<verb>`` on ``empire:<cell>:<resource>:<id>``;
 - SQL identifiers use the snake_case form (schema ``roles_skills``).
+- ``ranges`` lists ``[start, end]`` field pairs; a write that leaves both set must keep
+  ``start <= end`` (checked by the API, not by a database constraint).
 
 Example::
 
@@ -85,6 +87,13 @@ class Field:
     def nullable(self) -> bool:
         return not self.required and self.default is None
 
+    @property
+    def target(self) -> str:
+        """The resource a ref points at; the spec loader has checked that it exists."""
+        if self.to is None:
+            raise SpecError(f"{self.name}: not a ref field")
+        return self.to
+
 
 @dataclass(frozen=True)
 class Resource:
@@ -95,6 +104,8 @@ class Resource:
     filters: tuple[str, ...] = ()
     graph: tuple[str, ...] | None = None  # payload fields; None = no graph events
     unique: tuple[tuple[str, ...], ...] = ()
+    # (start, end) field pairs: when a write leaves both set, start must not come after end.
+    ranges: tuple[tuple[str, str], ...] = ()
     order: str = "id"
     # Import from the old SQLite table (cellkit-import): source table, the column that is the old id,
     # and value rewrites per field ({field: {old: new}}).
@@ -273,6 +284,7 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
         for listed in (*filters, *(graph or ()), *(c for u in unique for c in u)):
             if listed not in names:
                 raise SpecError(f"{rname}: {listed!r} is not a field")
+        ranges = tuple(_range(rname, pair, fields) for pair in raw.get("ranges") or ())
         unknown = set(raw) - {
             "table",
             "plural",
@@ -280,6 +292,7 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
             "filters",
             "graph",
             "unique",
+            "ranges",
             "order",
             "legacy_table",
             "legacy_id_from",
@@ -305,6 +318,7 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
                 filters=filters,
                 graph=tuple(graph) if graph is not None else None,
                 unique=unique,
+                ranges=ranges,
                 order=raw.get("order", "id"),
                 legacy_table=raw.get("legacy_table"),
                 legacy_id_from=raw.get("legacy_id_from", "id"),
@@ -333,6 +347,26 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
             raise SpecError(f"{r.name}: order must be id or a field")
     cell.ordered()
     return cell
+
+
+ORDERED_TYPES = ("date", "timestamp", "int", "bigint", "real")
+
+
+def _range(rname: str, pair: Any, fields: tuple[Field, ...]) -> tuple[str, str]:
+    """One ``ranges`` entry: two fields of the same ordered type, start first."""
+    by_name = {f.name: f for f in fields}
+    if not isinstance(pair, list | tuple) or len(pair) != 2:
+        raise SpecError(f"{rname}: a range is [start, end], got {pair!r}")
+    start, end = (str(name) for name in pair)
+    for name in (start, end):
+        if name not in by_name:
+            raise SpecError(f"{rname}: range field {name!r} is not a field")
+    kinds = {by_name[start].type, by_name[end].type}
+    if len(kinds) != 1 or not kinds <= set(ORDERED_TYPES):
+        raise SpecError(
+            f"{rname}: range {start}..{end} needs two fields of one ordered type"
+        )
+    return start, end
 
 
 def load(path: Path) -> Cell:

@@ -5,7 +5,7 @@
   variables and `~/.config/solo-subscriptions/` (owner-only).
 - Tests use a throwaway local PostgreSQL and a fake platform; they must never reach
   the hosted database or the hosted platform.
-- Run `.venv/bin/pytest -q` before committing. Migrations are append-only: never edit
+- Run `.venv/bin/pytest -q`, `.venv/bin/mypy .` and `uvx ruff@0.17.1 check . && uvx ruff@0.17.1 format --check .` before committing. Migrations are append-only: never edit
   an applied file, add a new numbered one.
 - `src/cellkit` is this repository's own service code (first generated from `cell.yaml`; the shared
   generator was retired on 2026-10-12). Change it here; there is nothing upstream to sync from.

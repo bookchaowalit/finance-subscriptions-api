@@ -30,7 +30,11 @@ def token_workspace(token: str) -> str:
 
 
 def publish_pending(
-    conn: psycopg.Connection, schema: str, platform: Any, token: str, limit: int = 100
+    conn: psycopg.Connection[Any],
+    schema: str,
+    platform: Any,
+    token: str,
+    limit: int = 100,
 ) -> dict[str, int]:
     """Publish due rows of the token's workspace; the batch is claimed and marked in one transaction.
 

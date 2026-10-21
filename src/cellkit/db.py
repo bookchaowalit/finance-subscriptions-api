@@ -25,7 +25,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from http.client import HTTPMessage
 from pathlib import Path
+from typing import IO, Any
 
 import psycopg
 from psycopg import sql
@@ -83,7 +85,7 @@ def pg_bin_dir(env: str) -> Path:
     if override:
         return Path(override)
     try:
-        import pgserver  # type: ignore[import-untyped]
+        import pgserver
 
         bundled = Path(pgserver.__file__).parent / "pginstall" / "bin"
         if (bundled / "pg_ctl").exists():
@@ -146,8 +148,8 @@ class LocalCluster:
             self._run("pg_ctl", "-D", str(self.data_dir), "-m", "fast", "-w", "stop")
 
     def connect(
-        self, role: str, dbname: str | None = None, **kwargs
-    ) -> psycopg.Connection:
+        self, role: str, dbname: str | None = None, **kwargs: Any
+    ) -> psycopg.Connection[Any]:
         return psycopg.connect(
             f"host={self.socket_dir} port={PORT} user={role} dbname={dbname or self.names.database}",
             **kwargs,
@@ -202,8 +204,8 @@ class HostedCluster:
         return cls(names, urls)
 
     def connect(
-        self, role: str, dbname: str | None = None, **kwargs
-    ) -> psycopg.Connection:
+        self, role: str, dbname: str | None = None, **kwargs: Any
+    ) -> psycopg.Connection[Any]:
         key = self.names.short(role)
         if key not in self.urls:
             raise SystemExit(
@@ -233,7 +235,7 @@ def migrate(cluster: LocalCluster | HostedCluster) -> list[str]:
             " name text PRIMARY KEY, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())"
         )
         conn.commit()
-        done = dict(
+        done: dict[str, str] = dict(
             conn.execute("SELECT name, sha256 FROM public.schema_migrations").fetchall()
         )
         files = sorted(names.migrations.glob("*.sql"))
@@ -261,12 +263,20 @@ def migrate(cluster: LocalCluster | HostedCluster) -> list[str]:
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(
-        self, req, fp, code, msg, headers, newurl
-    ):  # never forward the API key
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:  # never forward the API key
         return None
 
 
-def _neon(key: str, method: str, path: str, body: dict | None = None) -> dict:
+def _neon(
+    key: str, method: str, path: str, body: dict[str, Any] | None = None
+) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{NEON_API}{path}",
         method=method,
@@ -416,4 +426,4 @@ def provision(cell: Cell, project_name: str, region: str) -> str:
     ]
     _write_private(names.secrets_file, "".join(lines))
     migrate(HostedCluster(names, urls))
-    return project
+    return str(project)
