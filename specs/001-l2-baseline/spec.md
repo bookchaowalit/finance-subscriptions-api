@@ -89,6 +89,13 @@ Big Loop Plan Wave 2 (solo-empire `repository-catalog/roadmaps/BIG-LOOP-PLAN-202
 - **Then** the first delete is 409 `has_dependents`; after the review is gone the delete succeeds
 - **Test:** `tests/test_subscription_queries.py::test_a_subscription_with_reviews_cannot_be_deleted` · level: integration (API + throwaway PostgreSQL)
 
+### AC-09 — Numbers fit their columns
+
+- **Given** an int field (PostgreSQL integer) or a real field
+- **When** a client sends 2**31, or NaN / Infinity / 1e400 as raw JSON
+- **Then** the API answers 422 naming the field (before: a 500 from PostgreSQL, or the value silently stored as null)
+- **Test:** `tests/test_contract.py::test_numbers_fit_their_columns` · level: integration (API + throwaway PostgreSQL)
+
 ## 4. Interfaces and data
 
 | Interface | Change | Contract |
@@ -132,6 +139,7 @@ Big Loop Plan Wave 2 (solo-empire `repository-catalog/roadmaps/BIG-LOOP-PLAN-202
 | AC-06 | `tests/test_subscription_validation.py::test_a_review_must_point_at_an_existing_subscription` | characterization (behaviour already present; passed on first run) | CI run of the pushed tip | none |
 | AC-07 | `tests/test_subscription_validation.py::test_value_score_is_between_0_and_100` | characterization (behaviour already present; passed on first run) | CI run of the pushed tip | none |
 | AC-08 | `tests/test_subscription_queries.py::test_a_subscription_with_reviews_cannot_be_deleted` | characterization (behaviour already present; passed on first run) | CI run of the pushed tip | none |
+| AC-09 | `tests/test_contract.py::test_numbers_fit_their_columns` | 463fe12 · `.venv/bin/pytest -q -k numbers_fit` · `ValueError: Out of range float values are not JSON compliant: nan` | CI run of the pushed tip | none |
 
 ## 7. Risks and open questions
 

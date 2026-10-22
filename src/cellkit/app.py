@@ -28,6 +28,7 @@ import hashlib
 import importlib
 import json
 import logging
+import math
 import re
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
@@ -49,6 +50,8 @@ from fastapi import (
     Request as HttpRequest,
 )
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, create_model
@@ -103,6 +106,14 @@ def _python_type(f: Field) -> Any:
     }[f.type]
 
 
+# Integer column ranges (int = PostgreSQL integer, bigint and ref = bigint).
+COLUMN_LIMITS = {
+    "int": (-(2**31), 2**31 - 1),
+    "bigint": (-(2**63), 2**63 - 1),
+    "ref": (-(2**63), 2**63 - 1),
+}
+
+
 def _constraints(f: Field) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if f.type == "text":
@@ -115,6 +126,14 @@ def _constraints(f: Field) -> dict[str, Any]:
             out["ge"] = f.min
         if f.max is not None:
             out["le"] = f.max
+    if f.type in COLUMN_LIMITS:
+        # Past the column's range PostgreSQL raises (a 500); refuse it as a 422 instead.
+        low, high = COLUMN_LIMITS[f.type]
+        out["ge"] = max(out.get("ge", low), low)
+        out["le"] = min(out.get("le", high), high)
+    if f.type == "real":
+        # JSON NaN/Infinity (or 1e400) would be stored as NULL, even in a required field.
+        out["allow_inf_nan"] = False
     if f.type == "ref":
         out["gt"] = 0
     return out
@@ -192,6 +211,16 @@ def _ordered(value: Any) -> Any:
     return value
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def row_hash(row: dict[str, Any] | None) -> str | None:
     if row is None:
         return None
@@ -253,6 +282,18 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title=f"{cell.title} API", version="1.0.0", description=__doc__)
     log = logging.getLogger(f"cell.{cell.name}")
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(
+        _request: HttpRequest, exc: RequestValidationError
+    ) -> JSONResponse:
+        # FastAPI's default 422 echoes each bad input; a NaN/Infinity input cannot be encoded as
+        # JSON, which turned the 422 into a 500. Same body, with such inputs as strings.
+        return JSONResponse(
+            status_code=422,
+            content={"detail": jsonable_encoder(_json_safe(exc.errors()))},
+        )
+
     schema = cell.schema
 
     @app.middleware("http")
