@@ -32,6 +32,7 @@ __all__ = [
     "test_lifecycle",
     "test_missing_reference",
     "test_no_reference_across_workspaces",
+    "test_numbers_fit_their_columns",
     "test_publisher_delivers_the_outbox",
     "test_ranges_keep_start_before_end",
     "test_spec_refuses_bad_ranges",
@@ -460,6 +461,34 @@ def test_spec_refuses_bad_ranges():
         }
     )
     assert ok.resource("item").ranges == (("a", "b"),)
+
+
+def test_numbers_fit_their_columns(client, owner, harness, resource):
+    """An integer past its column (int = 32-bit) or a real that is NaN/Infinity is a 422, not a 500 or a silent null."""
+    cell, r = harness.cell, resource
+    ints = [
+        f for f in r.fields if f.type == "int" and (f.max is None or f.max > 2**31 - 1)
+    ]
+    reals = [f for f in r.fields if f.type == "real"]
+    if not ints and not reals:
+        pytest.skip("no int or real fields")
+    refs = {
+        f.target: make(client, owner, cell, cell.resource(f.target))["id"]
+        for f in r.refs
+        if f.required
+    }
+    headers = {**owner, "content-type": "application/json"}
+    for f in ints:
+        payload = {**body(r, refs, 300), f.name: 2**31}
+        response = client.post(f"/v1/{r.plural}", json=payload, headers=owner)
+        assert response.status_code == 422, (f.name, response.text)
+    for f in reals:
+        for raw in ("NaN", "Infinity", "1e400"):
+            sent = json.dumps({**body(r, refs, 400), f.name: 0.5}).replace(
+                "0.5", raw, 1
+            )
+            response = client.post(f"/v1/{r.plural}", content=sent, headers=headers)
+            assert response.status_code == 422, (f.name, raw, response.text)
 
 
 def _jwks_pair():
