@@ -8,14 +8,14 @@ Big Loop Plan Wave 2 (solo-empire `repository-catalog/roadmaps/BIG-LOOP-PLAN-202
 | Field | Value |
 |---|---|
 | Spec ID / version | SPEC-001 / 1.0 |
-| Status | in review (implemented; owner approval pending) |
+| Status | approved (2026-10-24, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/001-l2-baseline/spec.md` |
 | Owner (maker) | Claude Code (Wave 2 cells session) |
 | Reviewer (checker) | Fresh Claude reviewer session (no maker context) |
-| Approver | Owner (bookchaowalit): pending, see the Wave 2 report owner actions |
+| Approver | AI approval 2026-10-24 under the owner's process (see Approval) |
 | Requirement links | Big Loop DoD L2: `PRODUCT.md`, ≥ 3 test files, Sentry, type check; L1 lockfile |
 | Main-only | yes: committed straight to `main`, so the red run is local (ADR-0004 rule 2, v1.1) |
-| Created / approved | 2026-10-22 / pending owner |
+| Created / approved | 2026-10-22 / 2026-10-24 |
 
 ## 1. Problem and intent
 
@@ -159,3 +159,13 @@ Big Loop Plan Wave 2 (solo-empire `repository-catalog/roadmaps/BIG-LOOP-PLAN-202
 |---|---|---|---|---|
 | Implemented (DoD) | Reviewer (checker) | Fresh Claude reviewer / 2026-10-22 | see Wave 2 report | CI run of the pushed tip |
 | Implemented (DoD) | Approver | Owner | pending | Wave 2 report |
+
+## Approval (2026-10-24)
+
+| Field | Value |
+|---|---|
+| Checker | independent Claude reviewer subagent (`solo:solo-reviewer`, Sonnet, read-only, no maker context) |
+| Approver | AI approval under the owner's process (approvals by the owner or AI with evidence; maker and checker are different agents). Recorded by Claude session oa-remainder on the owner's instruction "ทำที่เหลือให้หน่อย" (2026-10-24) |
+| Verdict | **approved** |
+| Tests run by the checker | .venv/bin/pytest -q --cov: 120 passed, 11 skipped |
+| Evidence | test_subscription_validation.py, test_subscription_defaults.py (409s), test_subscription_queries.py (has_dependents); gate 57. |
