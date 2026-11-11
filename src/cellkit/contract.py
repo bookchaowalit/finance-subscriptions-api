@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 import jwt
+import psycopg
 import pytest
 
 from cellkit.publisher import publish_pending
@@ -406,6 +407,8 @@ _LOW_HIGH: dict[str, tuple[Any, Any]] = {
     "int": (1, 2),
     "bigint": (1, 2),
     "real": (1.0, 2.0),
+    "money": ("1.0000", "2.0000"),
+    "decimal": ("1.0000000000", "2.0000000000"),
 }
 
 
@@ -489,6 +492,72 @@ def test_numbers_fit_their_columns(client, owner, harness, resource):
             )
             response = client.post(f"/v1/{r.plural}", content=sent, headers=headers)
             assert response.status_code == 422, (f.name, raw, response.text)
+
+
+# Exact decimal values per type: (accepted input, stored and returned text, refused inputs).
+_EXACT: dict[str, tuple[list[tuple[Any, str]], list[str]]] = {
+    "money": (
+        [("1234.5678", "1234.5678"), (0.1, "0.1000"), ("7", "7.0000")],
+        ["1.23456", "1" + "0" * 15, "NaN", "Infinity", "abc", ""],
+    ),
+    "decimal": (
+        [("0.1234567891", "0.1234567891"), ("12", "12.0000000000")],
+        ["1.12345678901", "1" + "0" * 20, "NaN", "Infinity", "abc"],
+    ),
+}
+
+
+def test_money_is_exact(client, owner, harness, resource):
+    """SPEC-003 AC-01..AC-04: money and decimal fields store and return exact decimal strings."""
+    cell, r = harness.cell, resource
+    fields = [f for f in r.fields if f.type in _EXACT]
+    if not fields:
+        pytest.skip("no money or decimal fields")
+    refs = {
+        f.target: make(client, owner, cell, cell.resource(f.target))["id"]
+        for f in r.refs
+        if f.required
+    }
+    for n, f in enumerate(fields):
+        good, bad = _EXACT[f.type]
+        for i, (sent, stored) in enumerate(good):
+            payload = {**body(r, refs, 500 + 10 * n + i), f.name: sent}
+            created = client.post(f"/v1/{r.plural}", json=payload, headers=owner)
+            assert created.status_code == 201, (f.name, sent, created.text)
+            assert created.json()[f.name] == stored, (f.name, sent)
+            again = client.get(f"/v1/{r.plural}/{created.json()['id']}", headers=owner)
+            assert again.json()[f.name] == stored
+        for raw in [*bad, *(["-1"] if f.min is not None and f.min >= 0 else [])]:
+            payload = {**body(r, refs, 600 + n), f.name: raw}
+            refused = client.post(f"/v1/{r.plural}", json=payload, headers=owner)
+            assert refused.status_code == 422, (f.name, raw, refused.text)
+
+
+def test_currency_is_iso_4217(client, owner, harness, resource):
+    """SPEC-003 AC-05: currency fields take three upper-case letters only, in the API and the database."""
+    cell, r = harness.cell, resource
+    fields = [f for f in r.fields if f.type == "currency"]
+    if not fields:
+        pytest.skip("no currency fields")
+    refs = {
+        f.target: make(client, owner, cell, cell.resource(f.target))["id"]
+        for f in r.refs
+        if f.required
+    }
+    for n, f in enumerate(fields):
+        for raw in ("thb", "BAHT", "US", "", "U$D"):
+            payload = {**body(r, refs, 700 + n), f.name: raw}
+            refused = client.post(f"/v1/{r.plural}", json=payload, headers=owner)
+            assert refused.status_code == 422, (f.name, raw, refused.text)
+        payload = {**body(r, refs, 710 + n), f.name: "USD"}
+        created = client.post(f"/v1/{r.plural}", json=payload, headers=owner)
+        assert created.status_code == 201, created.text
+        assert created.json()[f.name] == "USD"
+        with pytest.raises(psycopg.errors.CheckViolation):
+            harness.superuser(
+                f"UPDATE {cell.schema}.{r.table} SET {f.name} = 'usd' WHERE id = %s RETURNING id",
+                (created.json()["id"],),
+            )
 
 
 def _jwks_pair():

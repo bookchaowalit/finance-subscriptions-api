@@ -21,16 +21,14 @@ def test_list_filters_by_status_and_provider(client, owner):
     assert ids(listed) == [wanted["id"]]
 
 
-def test_list_filters_by_owner_scope_and_billing_interval(client, owner):
-    wanted = create(
-        client, owner, owner_scope="venture", billing_interval="yearly"
-    ).json()
-    create(client, owner, owner_scope="venture", billing_interval="monthly")
-    create(client, owner, owner_scope="personal", billing_interval="yearly")
+def test_list_filters_by_scope_and_billing_interval(client, owner):
+    wanted = create(client, owner, scope="venture", billing_interval="yearly").json()
+    create(client, owner, scope="venture", billing_interval="monthly")
+    create(client, owner, scope="personal", billing_interval="yearly")
     listed = client.get(
         SUBSCRIPTIONS,
         headers=owner,
-        params={"owner_scope": "venture", "billing_interval": "yearly"},
+        params={"scope": "venture", "billing_interval": "yearly"},
     )
     assert ids(listed) == [wanted["id"]]
 
@@ -70,13 +68,13 @@ def test_stats_count_subscriptions_per_status(client, owner):
 
 
 def test_stats_count_subscriptions_per_billing_interval_for_one_scope(client, owner):
-    create(client, owner, billing_interval="monthly", owner_scope="venture")
-    create(client, owner, billing_interval="yearly", owner_scope="venture")
-    create(client, owner, billing_interval="yearly", owner_scope="personal")
+    create(client, owner, billing_interval="monthly", scope="venture")
+    create(client, owner, billing_interval="yearly", scope="venture")
+    create(client, owner, billing_interval="yearly", scope="personal")
     stats = client.get(
         f"{SUBSCRIPTIONS}/stats",
         headers=owner,
-        params={"group_by": "billing_interval", "owner_scope": "venture"},
+        params={"group_by": "billing_interval", "scope": "venture"},
     )
     assert stats.json()["groups"] == {"monthly": 1, "yearly": 1}
 

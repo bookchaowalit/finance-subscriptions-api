@@ -47,10 +47,12 @@ def test_billing_interval_must_be_a_known_interval(client, owner):
         assert create(client, owner, billing_interval=interval).status_code == 201
 
 
-def test_owner_scope_must_be_a_known_scope(client, owner):
-    assert create(client, owner, owner_scope="nobody").status_code == 422
-    for scope in ("personal", "solo_empire", "venture", "client", "shared"):
-        assert create(client, owner, owner_scope=scope).status_code == 201, scope
+def test_scope_is_a_free_label_of_at_most_64_characters(client, owner):
+    labelled = create(client, owner, scope="family")
+    assert labelled.status_code == 201, labelled.text
+    assert labelled.json()["scope"] == "family"
+    assert create(client, owner, scope="x" * 65).status_code == 422
+    assert create(client, owner, owner_scope="venture").status_code == 422
 
 
 def test_auto_renew_must_be_true_or_false(client, owner):

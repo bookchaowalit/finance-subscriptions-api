@@ -14,7 +14,7 @@ def test_new_subscription_defaults_to_active_monthly_thb_for_the_empire(client, 
     subscription = response.json()
     assert subscription["status"] == "active"
     assert subscription["billing_interval"] == "monthly"
-    assert subscription["owner_scope"] == "solo_empire"
+    assert subscription["scope"] == ""
     assert subscription["category"] == "software"
     assert subscription["currency"] == "THB"
     assert subscription["auto_renew"] is True
@@ -27,21 +27,21 @@ def test_defaults_can_be_overridden(client, owner):
         owner,
         status="trial",
         billing_interval="yearly",
-        owner_scope="personal",
+        scope="personal",
         category="media",
         currency="USD",
         auto_renew=False,
     ).json()
     assert subscription["status"] == "trial"
     assert subscription["billing_interval"] == "yearly"
-    assert subscription["owner_scope"] == "personal"
+    assert subscription["scope"] == "personal"
     assert subscription["category"] == "media"
     assert subscription["currency"] == "USD"
     assert subscription["auto_renew"] is False
 
 
 def test_amount_keeps_its_decimal_value(client, owner):
-    assert create(client, owner, amount=1234.56).json()["amount"] == 1234.56
+    assert create(client, owner, amount=1234.56).json()["amount"] == "1234.5600"
 
 
 def test_name_provider_and_scope_together_are_unique(client, owner):
@@ -54,9 +54,7 @@ def test_the_same_name_is_allowed_for_another_provider_or_scope(client, owner):
     assert create(client, owner, name="Plus", provider="Acme").status_code == 201
     other_provider = create(client, owner, name="Plus", provider="Globex")
     assert other_provider.status_code == 201, other_provider.text
-    other_scope = create(
-        client, owner, name="Plus", provider="Acme", owner_scope="personal"
-    )
+    other_scope = create(client, owner, name="Plus", provider="Acme", scope="personal")
     assert other_scope.status_code == 201, other_scope.text
 
 

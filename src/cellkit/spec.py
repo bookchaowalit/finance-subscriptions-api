@@ -43,6 +43,9 @@ TYPES = {
     "int",
     "bigint",
     "real",
+    "money",  # exact amount: numeric(19,4), a JSON string in responses
+    "decimal",  # exact quantity, unit price or rate: numeric(30,10)
+    "currency",  # ISO 4217 alpha-3 code
     "bool",
     "date",
     "timestamp",
@@ -60,6 +63,9 @@ RESERVED = {
     "expected_version",
     "deleted",
 }
+CURRENCY = re.compile(r"[A-Z]{3}")
+# (precision, scale) of the exact numeric types.
+NUMERIC = {"money": (19, 4), "decimal": (30, 10)}
 LEGACY_LIMIT = 1_000_000  # imported rows keep their old id; new rows start above it
 
 
@@ -225,6 +231,14 @@ def _field(name: str, raw: dict[str, Any], resource: str) -> Field:
             f"{resource}.{name}: refs are always restrict (delete the referencing rows first)"
         )
     if (
+        kind == "currency"
+        and raw.get("default") is not None
+        and not CURRENCY.fullmatch(str(raw["default"]))
+    ):
+        raise SpecError(
+            f"{resource}.{name}: currency default must be ISO 4217 (e.g. THB)"
+        )
+    if (
         raw.get("default") is not None
         and kind == "enum"
         and raw["default"] not in values
@@ -349,7 +363,7 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
     return cell
 
 
-ORDERED_TYPES = ("date", "timestamp", "int", "bigint", "real")
+ORDERED_TYPES = ("date", "timestamp", "int", "bigint", "real", "money", "decimal")
 
 
 def _range(rname: str, pair: Any, fields: tuple[Field, ...]) -> tuple[str, str]:

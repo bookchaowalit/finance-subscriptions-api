@@ -22,6 +22,7 @@ import json
 import sqlite3
 import sys
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,11 @@ def convert(f: Field, value: Any) -> Any:
         return int(value)
     if f.type == "real":
         return float(value)
+    if f.type in ("money", "decimal"):
+        # Through str: a SQLite REAL 0.1 becomes "0.1", not 0.1000000000000000055...
+        return str(Decimal(str(value)))
+    if f.type == "currency":
+        return str(value).strip().upper()
     return value
 
 

@@ -25,7 +25,7 @@ api
 The register of recurring costs (software and other subscriptions), a periodic review of whether
 each one is worth its price, and the aliases that map a statement line to a subscription.
 
-Success: each recurring cost exists once per name, provider and owner scope; each review covers a
+Success: each recurring cost exists once per name, provider and scope label; each review covers a
 valid period and a known verdict; each statement alias maps to one subscription or is visibly
 unresolved.
 
@@ -45,7 +45,11 @@ workspace-scoped, so the same service can serve other tenants without code chang
 
 ## Capabilities and Constraints
 
-- `/v1/subscriptions`: list (filters `status`, `owner_scope`, `provider`, `billing_interval`),
+- SPEC-003: amounts are exact `money` (`numeric(19,4)`) and quantities, unit prices and rates are
+  `decimal` (`numeric(30,10)`); both are JSON strings in responses (`"1234.5600"`). Currency fields
+  are ISO 4217 codes (three upper-case letters). `scope` is a free label the workspace defines (at
+  most 64 characters, default empty).
+- `/v1/subscriptions`: list (filters `status`, `scope`, `provider`, `billing_interval`),
   stats, get, get-by-legacy-id, create (with `Idempotency-Key`), patch (with `expected_version`),
   delete.
 - `/v1/subscription-reviews`: the same routes; filters `subscription_id`, `verdict`; ordered by
@@ -54,9 +58,9 @@ workspace-scoped, so the same service can serve other tenants without code chang
   ordered by id.
 - `stats` groups by one declared filter only; any other field is a 422.
 - Subscription rules: `name`, `provider` (each at most 200 characters) and `amount` (not negative)
-  are required; `name` + `provider` + `owner_scope` is unique (409); `status` is trial, active,
+  are required; `name` + `provider` + `scope` is unique (409); `status` is trial, active,
   paused, cancelled or expired (default active); `billing_interval` is weekly, monthly, quarterly,
-  yearly, one_time or usage (default monthly); `owner_scope` defaults to solo_empire; `currency`
+  yearly, one_time or usage (default monthly); `scope` defaults to empty; `currency`
   defaults to THB; `auto_renew` defaults to true.
 - Review rules: `subscription_id` must be an existing subscription of the same workspace (422
   `reference_not_found` otherwise); `review_date`, `period_start` and `period_end` are required;

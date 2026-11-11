@@ -1,19 +1,19 @@
 # Subscriptions cell: one of the ten finance services split from the retired finance_* tables (2026-10-12).
 # Recurring costs, their value reviews and the aliases that map statement lines to them.
-# Amounts are real (float) like every kit cell; cross-cell ids (account_id, ...) are plain bigints, not foreign keys.
+# Amounts are exact (money = numeric(19,4), decimal = numeric(30,10); SPEC-003); cross-cell ids (account_id, ...) are plain bigints, not foreign keys.
 cell: subscriptions
 title: Subscriptions
 resources:
   subscription:
     filters:
     - status
-    - owner_scope
+    - scope
     - provider
     - billing_interval
     unique:
     - - name
       - provider
-      - owner_scope
+      - scope
     fields:
       name:
         type: text
@@ -26,15 +26,10 @@ resources:
       category:
         type: text
         default: software
-      owner_scope:
-        type: enum
-        values:
-        - personal
-        - solo_empire
-        - venture
-        - client
-        - shared
-        default: solo_empire
+      scope:
+        type: text
+        max_length: 64
+        default: ''
       status:
         type: enum
         values:
@@ -55,13 +50,12 @@ resources:
         - usage
         default: monthly
       amount:
-        type: real
+        type: money
         min: 0
         required: true
       currency:
-        type: text
+        type: currency
         default: THB
-        max_length: 12
       started_on:
         type: date
       next_billing_date:
@@ -115,11 +109,10 @@ resources:
         type: real
         min: 0
       revenue_attributed:
-        type: real
+        type: money
         min: 0
       revenue_currency:
-        type: text
-        max_length: 12
+        type: currency
       value_score:
         type: int
         min: 0

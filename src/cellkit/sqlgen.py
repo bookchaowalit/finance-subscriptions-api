@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from cellkit.spec import LEGACY_LIMIT, Cell, Field, Resource
+from cellkit.spec import LEGACY_LIMIT, NUMERIC, Cell, Field, Resource
 
 
 def _literal(value: object) -> str:
@@ -27,8 +27,11 @@ def _literal(value: object) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def column(cell: Cell, f: Field) -> str:
-    sql_type = {
+def sql_type(f: Field) -> str:
+    if f.type in NUMERIC:
+        precision, scale = NUMERIC[f.type]
+        return f"numeric({precision},{scale})"
+    return {
         "text": "text",
         "int": "integer",
         "bigint": "bigint",
@@ -39,12 +42,12 @@ def column(cell: Cell, f: Field) -> str:
         "json": "jsonb",
         "enum": "text",
         "ref": "bigint",
+        "currency": "text",
     }[f.type]
-    parts = [f"{f.name:<24} {sql_type}"]
-    if f.required or f.default is not None:
-        parts.append("NOT NULL")
-    if f.default is not None:
-        parts.append(f"DEFAULT {_literal(f.default)}")
+
+
+def check(f: Field) -> str | None:
+    """The column's CHECK clause (without the keyword), or None."""
     checks = []
     if f.type == "enum":
         checks.append(f"{f.name} IN ({', '.join(_literal(v) for v in f.values)})")
@@ -52,19 +55,31 @@ def column(cell: Cell, f: Field) -> str:
         checks.append(f"length({f.name}) <= {int(f.max_length)}")
     if f.type == "text" and f.required:
         checks.append(f"length({f.name}) >= 1")
-    if f.type in ("int", "bigint", "real") and f.min is not None:
+    if f.type in ("int", "bigint", "real", "money", "decimal") and f.min is not None:
         checks.append(f"{f.name} >= {f.min}")
-    if f.type in ("int", "bigint", "real") and f.max is not None:
+    if f.type in ("int", "bigint", "real", "money", "decimal") and f.max is not None:
         checks.append(f"{f.name} <= {f.max}")
+    if f.type == "currency":
+        checks.append(f"{f.name} ~ '^[A-Z]{{3}}$'")
     if f.type == "json" and f.json_kind:
         checks.append(f"jsonb_typeof({f.name}) = '{f.json_kind}'")
-    if checks:
-        body = " AND ".join(checks)
-        parts.append(
-            f"CHECK ({f.name} IS NULL OR ({body}))"
-            if not (f.required or f.default is not None)
-            else f"CHECK ({body})"
-        )
+    if not checks:
+        return None
+    body = " AND ".join(checks)
+    if f.required or f.default is not None:
+        return f"({body})"
+    return f"({f.name} IS NULL OR ({body}))"
+
+
+def column(cell: Cell, f: Field) -> str:
+    parts = [f"{f.name:<24} {sql_type(f)}"]
+    if f.required or f.default is not None:
+        parts.append("NOT NULL")
+    if f.default is not None:
+        parts.append(f"DEFAULT {_literal(f.default)}")
+    clause = check(f)
+    if clause:
+        parts.append(f"CHECK {clause}")
     return " ".join(parts)
 
 

@@ -14,6 +14,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,7 @@ from cellkit.app import create_app
 from cellkit.auth import TokenVerifier
 from cellkit.db import LocalCluster, Names, migrate
 from cellkit.platform import Action, Denied, PlatformUnavailable
-from cellkit.spec import Cell, Field, Resource, load
+from cellkit.spec import NUMERIC, Cell, Field, Resource, load
 
 ISSUER = "empire-platform-test"
 
@@ -103,6 +104,13 @@ def sample(f: Field, n: int = 0) -> Any:
         high = f.max if f.max is not None else low + 10
         value = min(high, low + n)
         return float(value) if f.type == "real" else int(value)
+    if f.type in NUMERIC:
+        low_d = Decimal(str(f.min)) if f.min is not None else Decimal(1)
+        high_d = Decimal(str(f.max)) if f.max is not None else low_d + 10
+        scale = NUMERIC[f.type][1]
+        return format(min(high_d, low_d + n + Decimal("0.25")), f".{scale}f")
+    if f.type == "currency":
+        return ("THB", "USD", "EUR")[n % 3]
     if f.type == "bool":
         return n % 2 == 0
     if f.type == "date":
