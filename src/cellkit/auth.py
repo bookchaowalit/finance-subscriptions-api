@@ -101,33 +101,70 @@ class JwksKeys:
 
 
 @dataclass(frozen=True)
+class TrustedIssuer:
+    """A second issuer (platform-identity, SPEC-004), verified only with its own JWK Set.
+
+    Its tokens never carry a delegation (``del``/``obo``/``act``) and live at most
+    ``MAX_LIFETIME_SECONDS``.
+    """
+
+    issuer: str
+    jwks: JwksKeys = field(compare=False)
+
+
+IDENTITY_FORBIDDEN_CLAIMS = ("del", "obo", "act")
+
+
+@dataclass(frozen=True)
 class TokenVerifier:
     public_key_pem: str  # pinned key; "" when only the JWK Set is used
     issuer: str
     audience: str
     max_lifetime: int = HARD_MAX_LIFETIME_SECONDS
     jwks: JwksKeys | None = field(default=None, compare=False)
+    identity: TrustedIssuer | None = field(default=None, compare=False)
 
-    def _decode(self, token: str) -> dict[str, Any]:
+    def __post_init__(self) -> None:
+        if self.identity is not None and self.identity.issuer == self.issuer:
+            raise ValueError("the identity issuer must differ from the main issuer")
+
+    def _is_identity(self, token: str) -> bool:
+        if self.identity is None:
+            return False
+        try:
+            iss = jwt.decode(token, options={"verify_signature": False}).get("iss")
+        except jwt.PyJWTError:
+            return False
+        return iss == self.identity.issuer
+
+    def _decode(self, token: str) -> tuple[dict[str, Any], bool]:
+        if self.identity is not None and self._is_identity(token):
+            # Only the identity JWK Set: a main-issuer key never verifies an identity token.
+            return self._first(
+                token, self.identity.jwks.keys_for(token), self.identity.issuer
+            ), True
         keys = self.jwks.keys_for(token) if self.jwks else []
         if self.public_key_pem:
             keys.append(self.public_key_pem)  # fallback while cells move to the JWK Set
+        return self._first(token, keys, self.issuer), False
+
+    def _first(self, token: str, keys: list[Any], issuer: str) -> dict[str, Any]:
         if not keys:
             raise jwt.InvalidKeyError("no verification key")
         for key in keys[:-1]:
             try:
-                return self._decode_with(token, key)
+                return self._decode_with(token, key, issuer)
             except jwt.InvalidSignatureError:
                 continue
-        return self._decode_with(token, keys[-1])
+        return self._decode_with(token, keys[-1], issuer)
 
-    def _decode_with(self, token: str, key: Any) -> dict[str, Any]:
+    def _decode_with(self, token: str, key: Any, issuer: str) -> dict[str, Any]:
         return jwt.decode(
             token,
             key,
             algorithms=["RS256"],
             audience=self.audience,
-            issuer=self.issuer,
+            issuer=issuer,
             options={"require": ["exp", "iat", "sub", "jti"]},
         )
 
@@ -136,7 +173,11 @@ class TokenVerifier:
             raise Unauthenticated("missing bearer token")
         token = authorization.removeprefix("Bearer ")
         try:
-            claims = self._decode(token)
+            claims, from_identity = self._decode(token)
+            if from_identity and any(
+                name in claims for name in IDENTITY_FORBIDDEN_CLAIMS
+            ):
+                raise Unauthenticated("identity tokens cannot delegate")
             lifetime = claims["exp"] - claims["iat"]
             limit = (
                 self.max_lifetime

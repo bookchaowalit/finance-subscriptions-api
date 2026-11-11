@@ -11,8 +11,12 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from cellkit.spec import Cell, load
+
+if TYPE_CHECKING:
+    from cellkit.auth import TrustedIssuer
 
 
 def cell() -> Cell:
@@ -47,8 +51,9 @@ def api() -> None:
         from cellkit.platform import checked_url
 
         jwks = JwksKeys(checked_url(jwks_url, f"{env}_JWT_JWKS_URL"))
+    identity = _identity_trust(env, hosted, issuer)
     cluster = default_cluster(spec)
-    verifier = TokenVerifier(pem, issuer, spec.audience, jwks=jwks)
+    verifier = TokenVerifier(pem, issuer, spec.audience, jwks=jwks, identity=identity)
     app = create_app(
         spec,
         lambda: cluster.connect(spec.role("api")),
@@ -61,6 +66,28 @@ def api() -> None:
         host=os.environ.get("HOST", "0.0.0.0" if hosted else "127.0.0.1"),
         port=int(os.environ.get("PORT", str(spec.port))),
         proxy_headers=False,
+    )
+
+
+def _identity_trust(env: str, hosted: bool, main_issuer: str) -> TrustedIssuer | None:
+    """SPEC-004: platform-identity as a second issuer; both variables or neither."""
+    from cellkit.auth import JwksKeys, TrustedIssuer
+    from cellkit.platform import checked_url
+
+    issuer = os.environ.get(f"{env}_JWT_IDENTITY_ISSUER", "").strip()
+    url = os.environ.get(f"{env}_JWT_IDENTITY_JWKS_URL", "").strip()
+    if not issuer and not url:
+        return None
+    if not (issuer and url):
+        raise SystemExit(
+            f"set both {env}_JWT_IDENTITY_ISSUER and {env}_JWT_IDENTITY_JWKS_URL, or neither"
+        )
+    if issuer == main_issuer:
+        raise SystemExit(f"{env}_JWT_IDENTITY_ISSUER must differ from {env}_JWT_ISSUER")
+    if hosted and issuer == "empire-platform-dev":
+        raise SystemExit("hosted mode refuses the dev issuer as the identity issuer")
+    return TrustedIssuer(
+        issuer, JwksKeys(checked_url(url, f"{env}_JWT_IDENTITY_JWKS_URL"))
     )
 
 

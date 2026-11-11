@@ -27,6 +27,8 @@ def app_root(monkeypatch):
         "KIT_SAMPLE_JWT_PUBLIC_KEY_PEM",
         "KIT_SAMPLE_JWT_JWKS_URL",
         "KIT_SAMPLE_JWT_ISSUER",
+        "KIT_SAMPLE_JWT_IDENTITY_ISSUER",
+        "KIT_SAMPLE_JWT_IDENTITY_JWKS_URL",
         "KIT_SAMPLE_PUBLISHER_TOKEN",
         "EMPIRE_PLATFORM_URL",
         "HOST",
@@ -51,12 +53,14 @@ def configure_api(monkeypatch, **env: str) -> dict[str, Any]:
         return "app-sentinel"
 
     class FakeVerifier:
-        def __init__(self, pem, issuer, audience, jwks=None):
+        def __init__(self, pem, issuer, audience, jwks=None, identity=None):
             captured["verifier_args"] = (pem, issuer, audience, jwks)
+            captured["identity"] = identity
 
     class FakeJwks:
         def __init__(self, url):
             captured["jwks_url"] = url
+            captured.setdefault("jwks_urls", []).append(url)
 
     def fake_run(app, **kwargs):
         captured["uvicorn"] = (app, kwargs)
@@ -159,6 +163,90 @@ def test_the_jwks_url_must_be_https_and_is_passed_to_the_verifier(monkeypatch):
 
     monkeypatch.setenv("KIT_SAMPLE_JWT_JWKS_URL", "http://keys.example/jwks.json")
     with pytest.raises(ValueError, match="KIT_SAMPLE_JWT_JWKS_URL must be https"):
+        server.api()
+
+
+IDENTITY = "https://identity.example"
+
+
+def _identity_env(**extra: str) -> dict[str, str]:
+    return {
+        "KIT_SAMPLE_JWT_PUBLIC_KEY_PEM": PUBLIC_KEY,
+        "KIT_SAMPLE_JWT_ISSUER": "empire-platform",
+        "EMPIRE_PLATFORM_URL": PLATFORM,
+        **extra,
+    }
+
+
+def test_spec004_without_identity_variables_no_second_issuer_is_trusted(monkeypatch):
+    captured = configure_api(monkeypatch, **_identity_env())
+    server.api()
+    assert captured["identity"] is None
+
+
+def test_spec004_the_identity_issuer_gets_its_own_jwk_set(monkeypatch):
+    captured = configure_api(
+        monkeypatch,
+        **_identity_env(
+            KIT_SAMPLE_JWT_IDENTITY_ISSUER=IDENTITY,
+            KIT_SAMPLE_JWT_IDENTITY_JWKS_URL=f"{IDENTITY}/.well-known/jwks.json/",
+        ),
+    )
+    server.api()
+    identity = captured["identity"]
+    assert identity.issuer == IDENTITY
+    assert captured["jwks_urls"] == [f"{IDENTITY}/.well-known/jwks.json"]
+    assert (
+        captured["verifier_args"][3] is None
+    )  # the main issuer still uses only its pinned key
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"KIT_SAMPLE_JWT_IDENTITY_ISSUER": IDENTITY}, "set both"),
+        ({"KIT_SAMPLE_JWT_IDENTITY_JWKS_URL": f"{IDENTITY}/jwks.json"}, "set both"),
+        (
+            {
+                "KIT_SAMPLE_JWT_IDENTITY_ISSUER": "empire-platform",
+                "KIT_SAMPLE_JWT_IDENTITY_JWKS_URL": f"{IDENTITY}/j",
+            },
+            "must differ",
+        ),
+    ],
+)
+def test_spec004_incomplete_or_equal_identity_trust_refuses_to_start(
+    monkeypatch, env, message
+):
+    configure_api(monkeypatch, **_identity_env(**env))
+    with pytest.raises(SystemExit, match=message):
+        server.api()
+
+
+def test_spec004_the_identity_jwks_url_must_be_https(monkeypatch):
+    configure_api(
+        monkeypatch,
+        **_identity_env(
+            KIT_SAMPLE_JWT_IDENTITY_ISSUER=IDENTITY,
+            KIT_SAMPLE_JWT_IDENTITY_JWKS_URL="http://identity.example/jwks.json",
+        ),
+    )
+    with pytest.raises(
+        ValueError, match="KIT_SAMPLE_JWT_IDENTITY_JWKS_URL must be https"
+    ):
+        server.api()
+
+
+def test_spec004_hosted_mode_refuses_the_dev_issuer_as_identity_issuer(monkeypatch):
+    configure_api(
+        monkeypatch,
+        **_identity_env(
+            KIT_SAMPLE_DB_MODE="hosted",
+            KIT_SAMPLE_JWT_IDENTITY_ISSUER="empire-platform-dev",
+            KIT_SAMPLE_JWT_IDENTITY_JWKS_URL=f"{IDENTITY}/jwks.json",
+        ),
+    )
+    with pytest.raises(SystemExit, match="dev issuer"):
         server.api()
 
 
