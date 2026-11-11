@@ -102,8 +102,31 @@ class ExactFloat(float):
         return number
 
 
+# A binary float holds any decimal of up to 15 significant digits exactly (its repr round-trips).
+FLOAT_EXACT_DIGITS = 15
+
+
 def _exact(value: Any) -> Any:
-    return Decimal(value.text) if isinstance(value, ExactFloat) else value
+    """Money and decimal input: the JSON text when we parsed it, else a float only while it is exact.
+
+    Errors are ValueError so pydantic answers 422 (a raw InvalidOperation would be a 500).
+    """
+    try:
+        if isinstance(value, ExactFloat):
+            return Decimal(value.text)
+        if isinstance(value, float):
+            number = Decimal(repr(value))
+            if (
+                number.is_finite()
+                and len(number.as_tuple().digits) > FLOAT_EXACT_DIGITS
+            ):
+                raise ValueError(
+                    "more than 15 significant digits as a binary float; send the amount as a string"
+                )
+            return number
+    except InvalidOperation:
+        raise ValueError("not a representable decimal number") from None
+    return value
 
 
 class _ExactJsonRequest(HttpRequest):
@@ -191,9 +214,11 @@ def _constraints(f: Field) -> dict[str, Any]:
         top = Decimal("9" * (precision - scale) + "." + "9" * scale)
         out["decimal_places"] = scale
         out["allow_inf_nan"] = False
-        floor = Decimal(str(f.min)) if f.min is not None else -top
+        # Negation would round as well, so the lowest value is text too.
+        bottom = Decimal("-" + str(top))
+        floor = Decimal(str(f.min)) if f.min is not None else bottom
         ceiling = Decimal(str(f.max)) if f.max is not None else top
-        out["ge"] = max(floor, -top)
+        out["ge"] = max(floor, bottom)
         out["le"] = min(ceiling, top)
     if f.type == "currency":
         out["pattern"] = r"^[A-Z]{3}$"

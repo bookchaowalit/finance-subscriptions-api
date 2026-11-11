@@ -87,6 +87,20 @@ def test_numeric_bounds_are_exact():
     assert str(money["le"]) == "999999999999999.9999"
     assert str(money["ge"]) == "-999999999999999.9999"
     assert str(qty["le"]) == "99999999999999999999.9999999999"
+    assert str(qty["ge"]) == "-99999999999999999999.9999999999"
+
+
+def test_exact_reader_refuses_bad_numbers_as_validation_errors():
+    from cellkit.app import ExactFloat, _exact
+
+    for text in ("1e9999999999999999999", "-1e9999999999999999999"):
+        with pytest.raises(ValueError, match="representable"):
+            _exact(ExactFloat(text))
+    # A plain float (MCP arguments, Python callers) is exact up to 15 significant digits.
+    assert _exact(0.1) == Decimal("0.1")
+    assert _exact(123456789012.345) == Decimal("123456789012.345")
+    with pytest.raises(ValueError, match="significant digits"):
+        _exact(12345678901234.5678)
 
 
 # --- spec and SQL (AC-01..AC-05) ---------------------------------------------------------------
