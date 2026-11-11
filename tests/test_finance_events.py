@@ -483,3 +483,44 @@ def test_the_relay_job_goes_on_after_a_batch_of_failures_only(
     assert (printed["sent"], printed["failed"]) == (1, 1)
     assert [key for _, key, _ in fake.sent] == [other]
     _settle(harness, stuck, other)
+
+
+def test_the_relay_order_migration_numbers_every_workspaces_rows_as_the_migrator(
+    harness,
+):
+    """The migrator has no BYPASSRLS and the outbox forces RLS: the backfill must still see all rows."""
+    schema = harness.cell.schema
+    sql = next((ROOT / "migrations").glob("*_relay_order.sql")).read_text()
+    sql = re.sub(r"ALTER TABLE \S+ ADD COLUMN relay_seq[^;]*;", "", sql)
+    _drain(harness)
+    r = harness.cell.resources[0]
+    subject = f"empire:{harness.cell.name}:{r.name}:999994"
+    ws = str(uuid.uuid4())
+    for version in (1, 2):
+        _insert_event(harness, ws, subject, version)
+    # As if ADD COLUMN had numbered them in the wrong physical order.
+    harness.superuser(
+        f"UPDATE {schema}.outbox SET relay_seq = 1000000 - relay_seq WHERE subject = %s RETURNING 1",
+        (subject,),
+    )
+    with harness.cluster.connect(harness.cell.role("migrator")) as conn:
+        conn.execute(sql)
+    seqs = harness.superuser(
+        f"SELECT payload->>'version' FROM {schema}.outbox WHERE subject = %s ORDER BY relay_seq",
+        (subject,),
+    )
+    assert [v for (v,) in seqs] == ["1", "2"]
+    top = harness.superuser(f"SELECT max(relay_seq) FROM {schema}.outbox")[0][0]
+    _insert_event(harness, ws, subject, 3)
+    newest = harness.superuser(
+        f"SELECT relay_seq FROM {schema}.outbox WHERE subject = %s"
+        " AND payload->>'version' = '3'",
+        (subject,),
+    )[0][0]
+    assert newest > top
+    forced = harness.superuser(
+        "SELECT relforcerowsecurity FROM pg_class WHERE oid = %s::regclass",
+        (f"{schema}.outbox",),
+    )[0][0]
+    assert forced is True
+    _settle(harness, subject)
