@@ -132,7 +132,12 @@ def _bigint(value: Any) -> int | None:
     """An int that fits a bigint column, or None (bools and anything else are refused)."""
     if value is None or isinstance(value, bool):
         return None
-    number = int(value)
+    if isinstance(value, str) and value.lstrip("-").isdigit():
+        number = int(value)
+    elif isinstance(value, int):
+        number = value
+    else:
+        raise ValueError("not an integer")  # floats (also inf/NaN) and anything else
     if not BIGINT[0] <= number <= BIGINT[1]:
         raise ValueError("out of bigint range")
     return number
@@ -232,7 +237,7 @@ def catch_up(
             try:
                 with conn.transaction():
                     _apply(cur, cell, envelope)
-            except (KeyError, TypeError, ValueError, psycopg.DataError):
+            except Exception:  # noqa: BLE001 - any bad message is skipped; the position moves on
                 pass
             ends[partition] = max(ends.get(partition, 0), offset + 1)
         for partition, next_offset in ends.items():

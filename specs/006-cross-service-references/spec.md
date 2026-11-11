@@ -7,7 +7,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 1.1 |
+| Spec ID / version | SPEC-006 / 1.2 |
 | Status | approved (2026-11-11, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/006-cross-service-references/spec.md` (copy of the reference in finance-transactions-api) |
 | Owner (maker) | Claude Code (implementer session, 2026-11-11) |
@@ -75,7 +75,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 |---|---|---|
 | 1 | Eventual consistency: a target created in the other service is unknown until its event is relayed | inline relay right after the write + catch-up on a miss; 503 rather than a wrong yes |
 | 2 | Clients that wrote arbitrary account ids before | data is near empty (2026-11-11); existing rows are not re-checked |
-| 3 | A compromised finance cell can still publish events in another cell's name (one shared topic, no signature) | accepted for now: the Kafka ACL limits writers to the ten producers; per-producer topics or signed envelopes when a topic slot or a signing key is available |
+| 3 | A compromised finance cell can still publish events in another cell's name (one shared topic, no signature) | accepted for now: the Kafka ACL limits writers to the ten producers; per-producer topics or signed envelopes when a topic slot or a signing key is available; until then a forged high `event_seq` could pin one record's state |
 
 ## 8. Change log
 
@@ -83,6 +83,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 |---|---|---|---|
 | 1.0 | 2026-11-11 | cross-service references | owner, chat 2026-11-11 |
 | 1.1 | 2026-11-11 | Codex + security review before release: state per record follows the producer's outbox `seq` (`data.event_seq`), so a redelivered old `created` never revives a deleted target and a re-created legacy id still counts; the reader starts at the low watermark (expired messages); reader and connection setup errors become 503; the harness drops real Kafka/database settings; each message is applied in its own savepoint (a malformed or out-of-range message is skipped, the position moves on); only the producer named in the type may speak for that kind | owner, chat 2026-11-11 |
+| 1.2 | 2026-11-11 | Security review: any exception while applying one message skips it (int(inf) raised OverflowError past the savepoint); ids, versions and seqs must be integers or digit strings. Red: the forged/poison-message test failed on an inf record_id; green: 389 passed, 8 skipped, 1 xfailed | owner, chat 2026-11-11 |
 
 ## Approval
 

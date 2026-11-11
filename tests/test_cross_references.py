@@ -689,11 +689,15 @@ def test_a_bad_or_forged_message_is_skipped_and_the_position_moves_on(harness, r
     forged = event(f.references, "created", ws, next(_ids), status="active")
     forged["producer"] = "someone-else"
     huge = event(f.references, "created", ws, 2**70, status="active")
+    infinite = event(f.references, "created", ws, 1, status="active")
+    infinite["data"]["record_id"] = float("inf")
+    fractional = event(f.references, "created", ws, 1, status="active")
+    fractional["data"]["record_version"] = 1.5
     good = event(f.references, "created", ws, next(_ids), status="active")
-    for message in (forged, huge, good):
+    for message in (forged, huge, infinite, fractional, good):
         reader.add(message)
     with refs.sync_connection(harness.cell) as conn:
-        assert refs.catch_up(conn, harness.cell, reader) == 3
+        assert refs.catch_up(conn, harness.cell, reader) == 5
         assert refs.catch_up(conn, harness.cell, reader) == 0
     known = {
         row[0]
