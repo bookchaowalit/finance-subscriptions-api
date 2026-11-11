@@ -8,7 +8,7 @@ Phase 2 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-005 / 1.2 |
+| Spec ID / version | SPEC-005 / 1.3 |
 | Status | approved (2026-11-11, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/005-finance-events-kafka/spec.md` (copy of the reference in finance-budgets-api) |
 | Owner (maker) | Claude Code (implementer session, 2026-11-11) |
@@ -39,7 +39,7 @@ Phase 2 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | AC-01 | **Given** any resource, **when** a record is created, updated or deleted, **then** exactly one outbox row is written in the same transaction (`type` `<cell>.<resource>.<created|updated|deleted>`, subject `empire:<cell>:<resource>:<id>`). A refused or rolled-back write leaves none. |
 | AC-02 | **Given** a resource's `graph` fields, **then** they are reference data only: enums, refs and `*_id` numbers, `scope` and `currency`. No `money`/`decimal` amount, no free text (`name`, `notes`, `description`, `institution`, …), no `json`. |
 | AC-03 | **Given** pending outbox rows, **when** the relay runs, **then** each is published to `finance.events.v1` with key = subject and an envelope 1.0.0 (`id` = outbox id, `type`, `version` 1, `occurred_at`, `producer` = cell, `correlation_id`, `causation_id` = execution id, `data` = workspace id, record id, subject, graph fields, `deleted`), and marked relayed after the broker ack. |
-| AC-04 | **Given** a publish failure, **then** the row records only the error class, waits 1, 2, 4 … 64 minutes, and later rows of the same subject wait behind it (per-record order). |
+| AC-04 | **Given** a publish failure, **then** the row records only the error class, waits 1, 2, 4 … 64 minutes, and later rows of the same record wait behind it. A record is (workspace, subject); its events go out in insert order (`outbox.seq`), also across a delete and a re-import of the same legacy id; the hourly job keeps going after a batch of failures only. |
 | AC-05 | **Given** two relays at once, **then** only one works (advisory lock); the other reports `skipped`. |
 | AC-06 | **Given** a write through the API and a configured Kafka producer, **then** the API relays its own workspace's rows in a background task; a relay error never fails the request. Without Kafka settings nothing changes. |
 | AC-07 | **Given** the hourly run, **then** the job prints counts only (sent, failed, skipped, oldest unsent seconds) and posts heartbeat `finance-relay-<cell>`; a failure or a backlog older than 3 h marks it not ok. |
@@ -83,6 +83,7 @@ Phase 2 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | 1.0 | 2026-11-11 | finance events to Kafka | owner, chat 2026-11-11 |
 | 1.1 | 2026-11-11 | Codex review: the inline relay builds the producer inside its guarded task (bad Kafka settings no longer fail the write); a record's events go out in record-version order, not transaction-start order. Red: `test_a_broken_producer_setup_never_fails_the_write`, `test_a_record_is_relayed_in_version_order`; green: 327 passed, 8 skipped, 1 xfailed  | owner, chat 2026-11-11 |
 | 1.2 | 2026-11-11 | Security review: the hourly relay waits up to 30 s for the relay lock (`wait=30`, `lock_timeout`) instead of skipping, so frequent inline relays of one workspace cannot starve the sweep of every workspace. Red: `test_the_hourly_relay_waits_for_an_inline_relay_instead_of_skipping`; green: 356 passed, 8 skipped, 1 xfailed  | owner, chat 2026-11-11 |
+| 1.3 | 2026-11-11 | Codex review round 3. Per-workspace backoff, insert order (`outbox.seq`) and the job moving past a batch of failures landed with SPEC-006 (`0005_cross_references.sql`, commit fe3ba5c). Here: `0006_outbox_seq_backfill.sql` puts the unrelayed rows written before `seq` back in each record's order (`seq` had numbered them physically), as the migrator with FORCE RLS lifted for the backfill; rows written since keep theirs. Red: `test_rows_written_before_outbox_seq_keep_their_record_order`; green: 392 passed, 8 skipped, 1 xfailed; mypy, ruff check and format clean | owner, chat 2026-11-11 (review fixes inside the approved scope) |
 
 ## Approval
 

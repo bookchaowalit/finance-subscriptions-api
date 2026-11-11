@@ -103,6 +103,29 @@ def test_exact_reader_refuses_bad_numbers_as_validation_errors():
         _exact(12345678901234.5678)
 
 
+def test_trailing_zeros_of_a_float_are_not_significant_digits():
+    """1e14 is exact as a binary float; its repr's '.0' and integer zeros must not count."""
+    from cellkit.app import _exact
+    from cellkit.mcp import argument_models
+
+    assert _exact(1e14) == Decimal(100000000000000)
+    assert _exact(999999999999999.0) == Decimal(999999999999999)
+    assert _exact(1.5e-7) == Decimal("1.5E-7")
+    demo = parse(
+        {
+            "cell": "demo",
+            "resources": {"item": {"fields": {"amount": {"type": "money"}}}},
+        }
+    )
+    create = argument_models(demo, demo.resource("item"))["create"]
+    assert create.model_validate({"amount": 1e14}).amount == Decimal("1E14")
+    assert create.model_validate({"amount": 999999999999999.0}).amount == Decimal(
+        999999999999999
+    )
+    with pytest.raises(ValueError, match="significant digits"):
+        _exact(1234567890123456.0)
+
+
 # --- spec and SQL (AC-01..AC-05) ---------------------------------------------------------------
 
 

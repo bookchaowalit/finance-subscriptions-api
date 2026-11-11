@@ -116,9 +116,11 @@ def _exact(value: Any) -> Any:
             return Decimal(value.text)
         if isinstance(value, float):
             number = Decimal(repr(value))
+            # Trailing zeros are not significant: repr(1e14) is "100000000000000.0" (16 digits)
+            # yet 1e14 is exact, so count the digits of the normalized value.
             if (
                 number.is_finite()
-                and len(number.as_tuple().digits) > FLOAT_EXACT_DIGITS
+                and len(number.normalize().as_tuple().digits) > FLOAT_EXACT_DIGITS
             ):
                 raise ValueError(
                     "more than 15 significant digits as a binary float; send the amount as a string"
