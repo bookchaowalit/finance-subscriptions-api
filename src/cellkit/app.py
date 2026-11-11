@@ -353,6 +353,8 @@ class Plan:
     # False when the result is a row this attempt inserted: a replay of a finished operation must not
     # return it (the insert is rolled back; the original row may have been deleted since).
     replay_safe: bool = True
+    # Further permissions the platform enforces with ``permission`` in the same execution.
+    also: tuple[str, ...] = ()
 
 
 @dataclass
@@ -378,7 +380,14 @@ def create_app(
     platform: Platform,
     publisher_token: Callable[[], str | None] = lambda: None,
 ) -> FastAPI:
-    app = FastAPI(title=f"{cell.title} API", version="1.0.0", description=__doc__)
+    # /openapi.json stays public (describe_cell reads it); no Swagger or ReDoc pages.
+    app = FastAPI(
+        title=f"{cell.title} API",
+        version="1.0.0",
+        description=__doc__,
+        docs_url=None,
+        redoc_url=None,
+    )
     app.router.route_class = ExactRoute
     log = logging.getLogger(f"cell.{cell.name}")
 
@@ -456,6 +465,10 @@ def create_app(
                 caller.token, caller.channel, Action(action, resource_type, resource_id)
             )
         except Denied as exc:
+            if exc.status == 403:
+                raise HTTPException(
+                    status_code=403, detail={"error": "deny", "reason": exc.reason}
+                ) from exc
             raise HTTPException(
                 status_code=401,
                 detail={"error": "unauthenticated", "reason": exc.reason},
@@ -495,6 +508,7 @@ def create_app(
                         Action(plan.permission, resource_type, plan.resource_id),
                         idempotency_key,
                         correlation_id.get(),
+                        list(plan.also) or None,
                     )
                 except Denied as exc:
                     code = exc.status if exc.status in (401, 403, 409) else 403
@@ -945,6 +959,10 @@ def create_app(
                 )
             # Authorize before reserving anything (a reservation is a committed row).
             allow(caller, f"{cell.name}.{r.name}:write", r.name, "new")
+            # An import chooses the id and may backdate created_at/updated_at: :admin, not just :write.
+            importing = sent.legacy_id is not None
+            if importing:
+                allow(caller, f"{cell.name}.{r.name}:admin", r.name, "new")
             # An import keeps its old id (legacy_id); a retried import then conflicts instead of duplicating.
             reserved = (
                 reserve(caller, r, idempotency_key)
@@ -993,6 +1011,7 @@ def create_app(
                     emit(work, r, "created", None, row),
                     row,
                     replay_safe=False,
+                    also=(f"{cell.name}.{r.name}:admin",) if importing else (),
                 )
 
             row = referenced(
