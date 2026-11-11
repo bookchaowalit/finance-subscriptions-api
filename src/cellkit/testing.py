@@ -228,7 +228,10 @@ def platform() -> FakePlatform:
 @pytest.fixture
 def owner(harness, platform) -> dict[str, str]:
     actor, ws = uuid.uuid4(), uuid.uuid4()
-    platform.grants[actor] = set(harness.cell.permissions())
+    cell = harness.cell
+    # The owner may also import (legacy_id), which needs :admin on the resource.
+    admin = {f"{cell.name}.{r.name}:admin" for r in cell.resources}
+    platform.grants[actor] = set(cell.permissions()) | admin
     return harness.token(actor, ws)
 
 

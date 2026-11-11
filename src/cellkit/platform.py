@@ -109,6 +109,9 @@ class HttpPlatform:
         response = self._post("/v1/authz/decide", token, channel, self._body(action))
         if response.status_code == 401:
             raise Denied(401, "unauthenticated", "platform_refused_token")
+        if response.status_code == 403:
+            # The platform's own refusal (a scope the token lacks): a denial, not an outage.
+            raise Denied(403, "deny", "platform_refused_action")
         if response.status_code != 200:
             raise PlatformUnavailable(f"decide {response.status_code}")
         decision: object = response.json().get("decision")

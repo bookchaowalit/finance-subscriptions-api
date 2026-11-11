@@ -30,14 +30,18 @@ __all__ = [
     "test_executions_are_bound_to_the_record",
     "test_idempotent_create",
     "test_import_keeps_the_old_id",
+    "test_import_needs_admin",
     "test_inline_publish_failure_is_reported",
     "test_jwks_falls_back_to_the_pinned_key",
     "test_jwks_verification",
     "test_lifecycle",
     "test_missing_reference",
     "test_money_is_exact",
+    "test_no_docs_pages",
     "test_no_reference_across_workspaces",
     "test_numbers_fit_their_columns",
+    "test_platform_refusal_is_a_denial_not_an_outage",
+    "test_platform_refusal_on_decide_is_403",
     "test_publisher_delivers_the_outbox",
     "test_ranges_keep_start_before_end",
     "test_spec_refuses_bad_ranges",
@@ -291,6 +295,66 @@ def test_import_keeps_the_old_id(client, owner, harness, resource):
         ).status_code
         == 422
     )
+
+
+def test_import_needs_admin(client, harness, platform, resource):
+    """legacy_id picks the id and may backdate timestamps: :write alone is refused."""
+    cell, r = harness.cell, resource
+    actor = uuid.uuid4()
+    platform.grants[actor] = set(cell.permissions())
+    writer = harness.token(actor, uuid.uuid4())
+    refs = {
+        f.target: make(client, writer, cell, cell.resource(f.target))["id"]
+        for f in r.refs
+        if f.required and f.to != r.name
+    }
+    legacy = random.randint(1, LEGACY_LIMIT - 1)
+    refused = client.post(
+        f"/v1/{r.plural}", headers=writer, json={**body(r, refs), "legacy_id": legacy}
+    )
+    assert refused.status_code == 403, refused.text
+    rows = harness.superuser(
+        f"SELECT count(*) FROM {cell.schema}.{r.table} WHERE legacy_id = %s", (legacy,)
+    )
+    assert rows[0][0] == 0
+    # The same body without legacy_id is an ordinary :write.
+    assert (
+        client.post(f"/v1/{r.plural}", headers=writer, json=body(r, refs)).status_code
+        == 201
+    )
+
+
+def test_no_docs_pages(client):
+    for path in ("/docs", "/redoc"):
+        assert client.get(path).status_code == 404, path
+    assert client.get("/openapi.json").status_code == 200
+
+
+def test_platform_refusal_is_a_denial_not_an_outage():
+    from cellkit.platform import Action, Denied, HttpPlatform
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"detail": {"error": "forbidden"}})
+
+    hosted = HttpPlatform(
+        "https://platform.example.com",
+        client=httpx.Client(transport=httpx.MockTransport(answer)),
+    )
+    with pytest.raises(Denied) as refused:
+        hosted.decide("t", "api", Action("x.y:read", "y", "*"))
+    assert refused.value.status == 403
+
+
+def test_platform_refusal_on_decide_is_403(client, owner, harness, platform, resource):
+    from cellkit.platform import Denied
+
+    def refuse(*_args: Any, **_kwargs: Any) -> bool:
+        raise Denied(403, "deny", "platform_refused_action")
+
+    platform.decide = refuse
+    response = client.get(f"/v1/{resource.plural}", headers=owner)
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "deny"
 
 
 def test_validation(client, owner, harness, resource):
