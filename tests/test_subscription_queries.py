@@ -104,7 +104,11 @@ def test_cancelling_a_subscription_bumps_its_version(client, owner):
 def test_a_patch_that_changes_nothing_keeps_the_version(client, owner):
     subscription = create(client, owner, amount=99, status="trial").json()
     path = f"{SUBSCRIPTIONS}/{subscription['id']}"
-    same = client.patch(path, headers=owner, json={"amount": 99, "status": "trial"})
+    same = client.patch(
+        path,
+        headers=owner,
+        json={"amount": 99, "status": "trial", "expected_version": 1},
+    )
     assert same.status_code == 200, same.text
     assert same.json()["version"] == 1
 

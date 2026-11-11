@@ -446,7 +446,7 @@ def build_server(
                 ),
             ),
             "update": (
-                f"Change fields of a {what}; pass expected_version to refuse a stale write.",
+                f"Change fields of a {what}; expected_version refuses a stale write (required when an amount changes).",
                 lambda a, base=base: call(
                     "PATCH",
                     f"{base}/{a['id']}",
