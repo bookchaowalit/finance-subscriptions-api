@@ -7,7 +7,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 1.6 |
+| Spec ID / version | SPEC-006 / 1.7 |
 | Status | approved (2026-11-11, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/006-cross-service-references/spec.md` (copy of the reference in finance-transactions-api) |
 | Owner (maker) | Claude Code (implementer session, 2026-11-11) |
@@ -88,6 +88,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | 1.4 | 2026-11-11 | Codex review: a topic metadata error or a missing topic is Unavailable (503), not an empty topic; a stored position below the low watermark (events expired unread) is Unavailable, not "read"; DELETE checks `:delete` before the catch-up. Red: `test_a_topic_metadata_error_is_not_an_empty_topic`, `test_unread_history_that_expired_is_not_reported_as_read`, `test_a_delete_without_the_permission_reads_no_reference_data` (where something points here); green: 407 passed, 9 skipped, 1 xfailed | owner, chat 2026-11-11 |
 | 1.5 | 2026-11-11 | Security review: once the reader holds any stored position, a partition without one counts from offset 0 in the expired-history check. Red: `test_a_partition_without_a_stored_position_counts_from_zero_once_the_reader_has_one`; green: 408 passed, 9 skipped, 1 xfailed | owner, chat 2026-11-11 |
 | 1.6 | 2026-11-11 | Codex review: a catch-up that hits its deadline keeps what it read (position saved, then 503 this time), so a large backlog drains over several calls. Red: `test_a_catch_up_that_runs_out_of_time_keeps_what_it_read`; green: 411 passed, 10 skipped, 1 xfailed | owner, chat 2026-11-11 |
+| 1.7 | 2026-11-11 | Security review: every partition the reader looked at gets a stored position (its end, or where it starts), so a quiet partition with expired messages never makes the next read fail as "history expired". Red: `test_a_quiet_partition_gets_a_position_so_the_next_read_is_not_stuck`; green: 412 passed, 10 skipped, 1 xfailed | owner, chat 2026-11-11 |
 
 ## Approval
 

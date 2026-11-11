@@ -263,6 +263,8 @@ def catch_up(
                 # rolls the whole batch back, so the position stays and the batch is read again.
                 pass
             ends[partition] = max(ends.get(partition, 0), offset + 1)
+        for partition, position in getattr(reader, "positions", {}).items():
+            ends[partition] = max(ends.get(partition, 0), int(position))
         for partition, next_offset in ends.items():
             cur.execute(
                 f"INSERT INTO {s}.ref_offsets (topic, partition, next_offset) VALUES (%s, %s, %s)"
@@ -281,6 +283,8 @@ class KafkaReader:
     def __init__(self, config: dict[str, Any]) -> None:
         from confluent_kafka import Consumer
 
+        self.positions: dict[int, int] = {}
+
         self.consumer = Consumer(
             {**config, "enable.auto.commit": False, "auto.offset.reset": "earliest"}
         )
@@ -289,6 +293,8 @@ class KafkaReader:
         self, start: dict[int, int], deadline: float
     ) -> list[tuple[int, int, dict[str, Any]]]:
         from confluent_kafka import OFFSET_BEGINNING, TopicPartition
+
+        self.positions = {}  # never carry positions over from an earlier read
 
         meta = self.consumer.list_topics(
             TOPIC, timeout=max(1.0, deadline - time.monotonic())
@@ -316,6 +322,9 @@ class KafkaReader:
         # A reader with no stored position starts at the oldest message left.
         first = {p: max(start.get(p, 0), low) for p, (low, _high) in marks.items()}
         todo = {p for p in partitions if first[p] < ends[p]}
+        # Every partition looked at gets a position (read to its end, or where it starts), so a
+        # quiet partition is never mistaken for one whose history expired on the next read.
+        self.positions = {p: (first[p] if p in todo else ends[p]) for p in partitions}
         if not todo:
             return []
         self.consumer.assign(

@@ -554,6 +554,7 @@ def _reader(consumer):
 
     reader = refs.KafkaReader.__new__(refs.KafkaReader)
     reader.consumer = consumer
+    reader.positions = {}
     return reader
 
 
@@ -834,3 +835,33 @@ def test_a_catch_up_that_runs_out_of_time_keeps_what_it_read(harness, monkeypatc
             refs.catch_up(conn, harness.cell, slow)
         assert refs.catch_up(conn, harness.cell, slow) == 1  # continued from offset 2
     assert issubclass(refs.Incomplete, refs.Unavailable)
+
+
+def test_a_quiet_partition_gets_a_position_so_the_next_read_is_not_stuck(harness):
+    """A fresh reader starts a partition with expired messages at its low watermark and saves that."""
+    import time as _time
+    from types import SimpleNamespace
+
+    from cellkit import refs
+
+    harness.superuser(f"DELETE FROM {harness.cell.schema}.ref_offsets RETURNING 1")
+
+    class _Two(_Consumer):
+        def list_topics(self, topic, timeout):
+            return SimpleNamespace(
+                topics={topic: SimpleNamespace(partitions={0: None, 1: None})}
+            )
+
+        def get_watermark_offsets(self, tp, timeout):
+            return (
+                (0, 1) if tp.partition == 0 else (4, 4)
+            )  # partition 1: expired, nothing new
+
+    with harness.cluster.connect(harness.cell.role("publisher")) as conn:
+        assert (
+            refs.catch_up(conn, harness.cell, _reader(_Two([_Msg(0, 0, b"{}")]))) == 1
+        )
+        assert (
+            refs.catch_up(conn, harness.cell, _reader(_Two([]))) == 0
+        )  # not "history expired"
+    del _time
