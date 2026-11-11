@@ -630,6 +630,28 @@ def test_unread_history_that_expired_is_not_reported_as_read():
         _reader(_Expired([])).read({0: 2}, _time.monotonic() + 1)
 
 
+def test_a_partition_without_a_stored_position_counts_from_zero_once_the_reader_has_one():
+    """Only partitions that delivered something store a position; the others started at 0."""
+    import time as _time
+    from types import SimpleNamespace
+
+    from cellkit import refs
+
+    class _Two(_Consumer):
+        def list_topics(self, topic, timeout):
+            return SimpleNamespace(
+                topics={topic: SimpleNamespace(partitions={0: None, 1: None})}
+            )
+
+        def get_watermark_offsets(self, tp, timeout):
+            return (
+                (0, 3) if tp.partition == 0 else (4, 6)
+            )  # partition 1 lost offsets 0-3
+
+    with pytest.raises(refs.Unavailable, match="expired"):
+        _reader(_Two([])).read({0: 3}, _time.monotonic() + 1)
+
+
 def test_a_topic_metadata_error_is_not_an_empty_topic():
     import time as _time
     from types import SimpleNamespace

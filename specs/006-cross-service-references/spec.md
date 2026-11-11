@@ -7,7 +7,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 1.4 |
+| Spec ID / version | SPEC-006 / 1.5 |
 | Status | approved (2026-11-11, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/006-cross-service-references/spec.md` (copy of the reference in finance-transactions-api) |
 | Owner (maker) | Claude Code (implementer session, 2026-11-11) |
@@ -86,6 +86,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | 1.2 | 2026-11-11 | Security review: any exception while applying one message skips it (int(inf) raised OverflowError past the savepoint); ids, versions and seqs must be integers or digit strings. Red: the forged/poison-message test failed on an inf record_id; green: 389 passed, 8 skipped, 1 xfailed | owner, chat 2026-11-11 |
 | 1.3 | 2026-11-11 | Security review: only content errors skip a message; a database or lock failure rolls the batch back so the position stays (no silent drift). Red: `test_a_database_failure_keeps_the_position_for_a_retry`; green: 389 passed, 8 skipped, 1 xfailed | owner, chat 2026-11-11 |
 | 1.4 | 2026-11-11 | Codex review: a topic metadata error or a missing topic is Unavailable (503), not an empty topic; a stored position below the low watermark (events expired unread) is Unavailable, not "read"; DELETE checks `:delete` before the catch-up. Red: `test_a_topic_metadata_error_is_not_an_empty_topic`, `test_unread_history_that_expired_is_not_reported_as_read`, `test_a_delete_without_the_permission_reads_no_reference_data` (where something points here); green: 407 passed, 9 skipped, 1 xfailed | owner, chat 2026-11-11 |
+| 1.5 | 2026-11-11 | Security review: once the reader holds any stored position, a partition without one counts from offset 0 in the expired-history check. Red: `test_a_partition_without_a_stored_position_counts_from_zero_once_the_reader_has_one`; green: 408 passed, 9 skipped, 1 xfailed | owner, chat 2026-11-11 |
 
 ## Approval
 
