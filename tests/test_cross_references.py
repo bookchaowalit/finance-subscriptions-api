@@ -865,3 +865,48 @@ def test_a_quiet_partition_gets_a_position_so_the_next_read_is_not_stuck(harness
             refs.catch_up(conn, harness.cell, _reader(_Two([]))) == 0
         )  # not "history expired"
     del _time
+
+
+def test_an_event_missing_its_reference_field_never_clears_a_dependent(
+    client, harness, tenant, reader
+):
+    """A newer non-delete event without the reference field is malformed: it is skipped."""
+    if not _referenced():
+        pytest.skip("nothing points at this cell")
+    ws, headers = tenant
+    r = _referenced()[0]
+    record = make(client, headers, harness.cell, r)
+    source = r.referenced_by[0]
+    dependent = next(_ids)
+    kind = f"{source.cell}.{source.resource}"
+    reader.add(event(kind, "created", ws, dependent, **{source.field: record["id"]}))
+    reader.add(event(kind, "updated", ws, dependent, version=2))  # no reference field
+    blocked = client.delete(f"/v1/{r.plural}/{record['id']}", headers=headers)
+    assert blocked.status_code == 409, blocked.text
+
+
+def test_a_catch_up_stops_applying_at_its_deadline_and_resumes_there(
+    harness, monkeypatch
+):
+    """Applying a big batch counts against the deadline; what is left is read again next time."""
+    from cellkit import refs
+
+    harness.superuser(f"DELETE FROM {harness.cell.schema}.ref_offsets RETURNING 1")
+    clock = iter(range(0, 10_000, 4))  # each call to the clock moves 4 s on
+    monkeypatch.setattr(refs.time, "monotonic", lambda: float(next(clock)))
+
+    class _Big:
+        def __init__(self) -> None:
+            self.positions = {0: 3}
+
+        def read(self, start, deadline):
+            return [(0, o, {"probe": o}) for o in range(start.get(0, 0), 3)]
+
+    with harness.cluster.connect(harness.cell.role("publisher")) as conn:
+        with pytest.raises(refs.Unavailable):
+            refs.catch_up(conn, harness.cell, _Big(), seconds=5.0)
+        (saved,) = conn.execute(
+            f"SELECT next_offset FROM {harness.cell.schema}.ref_offsets"
+            " WHERE partition = 0"
+        ).fetchone()
+    assert 1 <= saved < 3  # some progress, never past what was applied

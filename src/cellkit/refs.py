@@ -28,6 +28,7 @@ from cellkit.spec import Cell, Field, Resource
 
 TOPIC = relay.TOPIC
 CATCH_UP_SECONDS = 5.0
+READ_SHARE = 0.6  # of the catch-up deadline; applying gets the rest
 # Only the test harness sets this (cellkit.testing): writes then accept any id without a lookup.
 AUTOTRUST = False
 
@@ -176,6 +177,12 @@ def _apply(cur: Any, cell: Cell, envelope: Mapping[str, Any]) -> bool:
     # version starts again at 1), and makes a redelivered old event a no-op.
     seq = _bigint(data.get("event_seq")) or 0
     deleted = bool(data.get("deleted"))
+    if not deleted:
+        for _r, source in sources:
+            # A live record's event always carries its reference fields (None when unset); one
+            # without them is malformed and must not clear a dependent (KeyError: skipped).
+            if source.field not in data:
+                raise KeyError(source.field)
     status = data.get("status")
     status = str(status)[:64] if status is not None else None
     s = cell.schema
@@ -239,13 +246,23 @@ def catch_up(
         }
         # A backlog bigger than one deadline still drains: what was read is applied and its position
         # saved, then the caller hears Unavailable (this time) and the next catch-up goes on from there.
+        # One deadline covers reading and applying: reading gets most of it, applying stops at the
+        # end (after at least one message, so a backlog always moves) and the rest is read again.
+        began = time.monotonic()
         incomplete: Incomplete | None = None
         try:
-            messages = reader.read(start, time.monotonic() + seconds)
+            messages = reader.read(start, began + seconds * READ_SHARE)
         except Incomplete as exc:
             incomplete, messages = exc, exc.messages
         ends: dict[int, int] = {}
-        for partition, offset, envelope in messages:
+        left: set[int] = set()
+        applied = 0
+        for index, (partition, offset, envelope) in enumerate(messages):
+            if index and time.monotonic() > began + seconds:
+                left = {p for p, _, _ in messages[index:]}
+                incomplete = incomplete or Incomplete(messages[:index])
+                break
+            applied += 1
             # One bad message (malformed, out of range) is skipped, never a stuck offset: each is
             # applied in its own savepoint and the read position moves past it either way.
             try:
@@ -264,7 +281,8 @@ def catch_up(
                 pass
             ends[partition] = max(ends.get(partition, 0), offset + 1)
         for partition, position in getattr(reader, "positions", {}).items():
-            ends[partition] = max(ends.get(partition, 0), int(position))
+            if partition not in left:  # never move past a message that was not applied
+                ends[partition] = max(ends.get(partition, 0), int(position))
         for partition, next_offset in ends.items():
             cur.execute(
                 f"INSERT INTO {s}.ref_offsets (topic, partition, next_offset) VALUES (%s, %s, %s)"
@@ -274,7 +292,7 @@ def catch_up(
             )
     if incomplete is not None:
         raise incomplete  # after the commit: the partial progress is kept
-    return len(messages)
+    return applied
 
 
 class KafkaReader:
