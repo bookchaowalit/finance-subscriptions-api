@@ -163,6 +163,17 @@ class Resource:
     def refs(self) -> tuple[Field, ...]:
         return tuple(f for f in self.fields if f.type == "ref")
 
+    @property
+    def bounds(self) -> dict[str, tuple[Field, str]]:
+        """List/stats range parameters (SPEC-007): ``<field>_from`` (>=) and ``<field>_to`` (<=)
+        for every date or timestamp field. Both ends are inclusive."""
+        found: dict[str, tuple[Field, str]] = {}
+        for f in self.fields:
+            if f.type in ("date", "timestamp"):
+                found[f"{f.name}_from"] = (f, ">=")
+                found[f"{f.name}_to"] = (f, "<=")
+        return found
+
 
 @dataclass(frozen=True)
 class Cell:
@@ -328,6 +339,13 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
             for fname, fraw in (raw.get("fields") or {}).items()
         )
         names = {f.name for f in fields}
+        for f in fields:
+            if f.type in ("date", "timestamp"):
+                for bound in (f"{f.name}_from", f"{f.name}_to"):
+                    if bound in names:
+                        raise SpecError(
+                            f"{rname}.{bound}: clashes with the range parameter of {f.name} (SPEC-007)"
+                        )
         filters = tuple(raw.get("filters") or ())
         graph = raw.get("graph")
         unique = tuple(tuple(u) for u in raw.get("unique") or ())

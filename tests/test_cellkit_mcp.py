@@ -210,6 +210,13 @@ def test_list_arguments_are_the_declared_filters_plus_paging(mini_cell):
     assert set(models["list"].model_fields) == {
         "status",
         "category",
+        # SPEC-007: inclusive bounds on every date and timestamp field
+        "starts_on_from",
+        "starts_on_to",
+        "ends_on_from",
+        "ends_on_to",
+        "seen_at_from",
+        "seen_at_to",
         "limit",
         "offset",
         "order",

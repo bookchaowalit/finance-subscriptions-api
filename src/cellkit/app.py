@@ -11,8 +11,8 @@ live in empire-platform and are reached over HTTP with the caller's token:
 Routes for every resource (``<plural>`` from the spec)::
 
     GET    /v1/<plural>                 list (field filters, id, legacy_id, updated_since,
-                                        null, order, after_id, limit, offset)
-    GET    /v1/<plural>/stats           counts grouped by one filter field
+                                        <date field>_from/_to, null, order, after_id, limit, offset)
+    GET    /v1/<plural>/stats           counts grouped by one filter field (same filters)
     GET    /v1/<plural>/legacy/{id}     one record by its id in the old system
     GET    /v1/<plural>/{id}            one record
     POST   /v1/<plural>                 create (Idempotency-Key; legacy_id keeps the old id)
@@ -746,9 +746,11 @@ def create_app(
         return int(row["record_id"])
 
     def where(r: Resource, query: Any) -> tuple[list[str], list[Any]]:
-        """WHERE parts from the query string: field filters (repeat for any-of), id, legacy_id, updated_since, null."""
+        """WHERE parts from the query string: field filters (repeat for any-of), id, legacy_id,
+        updated_since, null, and <date field>_from/_to (SPEC-007)."""
         clauses, params = ["TRUE"], []
-        unknown = set(query.keys()) - STANDARD_PARAMS - set(r.filters)
+        bounds = r.bounds
+        unknown = set(query.keys()) - STANDARD_PARAMS - set(r.filters) - set(bounds)
         if unknown:
             raise HTTPException(
                 status_code=422,
@@ -773,6 +775,21 @@ def create_app(
                     "updated_since",
                 )
             )
+        given: dict[str, Any] = {}
+        for name, (f, op) in bounds.items():
+            if query.get(name):
+                # A timestamp without an offset is UTC (SPEC-007 AC-03), whatever the session zone.
+                given[name] = _ordered(coerce(f, query[name], name))
+                clauses.append(f"{f.name} {op} %s")
+                params.append(given[name])
+        for name, (f, op) in bounds.items():
+            if op == ">=" and name in given:
+                upper = f"{f.name}_to"
+                if upper in given and _ordered(given[name]) > _ordered(given[upper]):
+                    raise HTTPException(
+                        status_code=422,
+                        detail={"error": "invalid_value", "fields": [name, upper]},
+                    )
         for name in query.getlist("null"):
             if name not in r.columns:
                 raise HTTPException(

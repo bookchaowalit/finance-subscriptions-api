@@ -25,6 +25,7 @@ __all__ = [
     "pytest_generate_tests",
     "test_authorization",
     "test_currency_is_iso_4217",
+    "test_date_bounds_narrow_the_list",
     "test_executions_are_bound_to_the_record",
     "test_idempotent_create",
     "test_import_keeps_the_old_id",
@@ -446,6 +447,54 @@ def test_ranges_keep_start_before_end(client, owner, harness, resource):
         )
         resent = client.patch(path, headers=owner, json={start: high, end: low})
         assert resent.status_code == 200, resent.text
+
+
+def test_date_bounds_narrow_the_list(client, owner, harness, resource):
+    """SPEC-007: <field>_from / <field>_to on every date and timestamp field, inclusive."""
+    cell, r = harness.cell, resource
+    if not r.bounds:
+        pytest.skip("no date or timestamp fields")
+    for n, f in enumerate(x for x in r.fields if x.type in ("date", "timestamp")):
+        low, high = _LOW_HIGH[f.type]
+        # A field in a range gets the same value as its partner, so the range rule never refuses it.
+        partners = {a if b == f.name else b for a, b in r.ranges if f.name in (a, b)}
+        early, late = (
+            make(
+                client,
+                owner,
+                cell,
+                r,
+                300 + 10 * n + k,
+                **{f.name: value, **dict.fromkeys(partners, value)},
+            )["id"]
+            for k, value in enumerate((low, high))
+        )
+        upper = high.replace("+00:00", "Z") if f.type == "timestamp" else high
+        for bounds, expected in (
+            ({f"{f.name}_from": high}, {late}),
+            ({f"{f.name}_to": low}, {early}),
+            ({f"{f.name}_from": low, f"{f.name}_to": upper}, {early, late}),
+        ):
+            listed = client.get(
+                f"/v1/{r.plural}",
+                headers=owner,
+                params={"id": [early, late], **bounds},
+            )
+            assert listed.status_code == 200, listed.text
+            assert {item["id"] for item in listed.json()["items"]} == expected, bounds
+        inverted = client.get(
+            f"/v1/{r.plural}",
+            headers=owner,
+            params={f"{f.name}_from": high, f"{f.name}_to": low},
+        )
+        assert inverted.status_code == 422, inverted.text
+        bad = client.get(
+            f"/v1/{r.plural}", headers=owner, params={f"{f.name}_from": "not-a-date"}
+        )
+        assert bad.json()["detail"] == {
+            "error": "invalid_value",
+            "fields": [f"{f.name}_from"],
+        }
 
 
 def test_spec_refuses_bad_ranges():

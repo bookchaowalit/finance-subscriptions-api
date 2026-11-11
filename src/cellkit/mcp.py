@@ -8,7 +8,8 @@ change who it acts as by adding fields to a tool call.
 
 Per resource ``<cell>.<resource>.<operation>``::
 
-    list    filters declared in the spec, limit, offset, order   GET    /v1/<plural>
+    list    filters declared in the spec, <date field>_from/_to,
+            limit, offset, order                                 GET    /v1/<plural>
     get     id                                                   GET    /v1/<plural>/{id}
     create  the resource's fields                                POST   /v1/<plural>
     update  id, expected_version, the resource's fields          PATCH  /v1/<plural>/{id}
@@ -239,6 +240,12 @@ def argument_models(cell: Cell, r: Resource) -> dict[str, type[Strict]]:
             f.name: typed(f, required=False)
             for f in exposed
             if f.name in r.filters and f.name not in ("limit", "offset", "order")
+        },
+        # SPEC-007: inclusive date/timestamp bounds, same names as the HTTP list.
+        **{
+            name: (_python_type(f) | None, PydanticField(default=None))
+            for name, (f, _) in r.bounds.items()
+            if f in exposed
         },
         "limit": (int, PydanticField(default=50, ge=1, le=MAX_LIMIT)),
         "offset": (int, PydanticField(default=0, ge=0)),
