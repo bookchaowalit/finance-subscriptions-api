@@ -7,7 +7,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 1.2 |
+| Spec ID / version | SPEC-006 / 1.3 |
 | Status | approved (2026-11-11, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/006-cross-service-references/spec.md` (copy of the reference in finance-transactions-api) |
 | Owner (maker) | Claude Code (implementer session, 2026-11-11) |
@@ -84,6 +84,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | 1.0 | 2026-11-11 | cross-service references | owner, chat 2026-11-11 |
 | 1.1 | 2026-11-11 | Codex + security review before release: state per record follows the producer's outbox `seq` (`data.event_seq`), so a redelivered old `created` never revives a deleted target and a re-created legacy id still counts; the reader starts at the low watermark (expired messages); reader and connection setup errors become 503; the harness drops real Kafka/database settings; each message is applied in its own savepoint (a malformed or out-of-range message is skipped, the position moves on); only the producer named in the type may speak for that kind | owner, chat 2026-11-11 |
 | 1.2 | 2026-11-11 | Security review: any exception while applying one message skips it (int(inf) raised OverflowError past the savepoint); ids, versions and seqs must be integers or digit strings. Red: the forged/poison-message test failed on an inf record_id; green: 389 passed, 8 skipped, 1 xfailed | owner, chat 2026-11-11 |
+| 1.3 | 2026-11-11 | Security review: only content errors skip a message; a database or lock failure rolls the batch back so the position stays (no silent drift). Red: `test_a_database_failure_keeps_the_position_for_a_retry`; green: 389 passed, 8 skipped, 1 xfailed | owner, chat 2026-11-11 |
 
 ## Approval
 
