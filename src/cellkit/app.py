@@ -16,7 +16,7 @@ Routes for every resource (``<plural>`` from the spec)::
     GET    /v1/<plural>/legacy/{id}     one record by its id in the old system
     GET    /v1/<plural>/{id}            one record
     POST   /v1/<plural>                 create (Idempotency-Key; legacy_id keeps the old id)
-    PATCH  /v1/<plural>/{id}            change fields (expected_version)
+    PATCH  /v1/<plural>/{id}            change fields (expected_version; required with a money field, SPEC-009)
     DELETE /v1/<plural>/{id}            delete
     POST   /v1/<plural>/erase           delete the caller's workspace records in batches (SPEC-008)
 
@@ -1054,9 +1054,24 @@ def create_app(
             # The body model is built from cell.yaml at startup, so mypy cannot see its fields.
             sent: Any = body
             requested = values(r, sent, sent.model_fields_set - {"expected_version"})
+            # SPEC-009: changing an amount must name the version it changes (no lost update on money).
+            money_sent = sorted(
+                f.name
+                for f in r.fields
+                if f.type == "money" and f.name in sent.model_fields_set
+            )
 
             def op(work: Work) -> Plan:
                 before = load(work.conn, r, record_id, lock=True)
+                if money_sent and sent.expected_version is None:
+                    raise HTTPException(
+                        status_code=428,
+                        detail={
+                            "error": "version_required",
+                            "fields": money_sent,
+                            "version": before["version"],
+                        },
+                    )
                 if (
                     sent.expected_version is not None
                     and before["version"] != sent.expected_version

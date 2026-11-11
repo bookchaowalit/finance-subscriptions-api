@@ -28,6 +28,7 @@ Commits touching `src/cellkit/` or `cell.yaml`:
 | `ranges` rule | yes: `subscription-review` period_start..period_end | 9e6125e · `.venv/bin/pytest -q tests/test_subscription_validation.py::test_a_review_period_cannot_end_before_it_starts` · `assert 201 == 422` |
 | Column limits / finite reals | yes: `subscription-review.usage_events`, `subscription-review.value_score`, `subscription-review.revenue_attributed`, `subscription-review.time_saved_hours`, `subscription-review.usage_hours`, `subscription.amount` | 463fe12 · `.venv/bin/pytest -q -k numbers_fit` · `ValueError: Out of range float values are not JSON compliant: nan` |
 | Security review P3s (2026-11-11): import with `legacy_id` needs `<cell>.<resource>:admin` (it picks the id and may backdate timestamps; the owner grants it only for an import), a PDP 403 is a 403 not a 503, no `/docs`/`/redoc` pages (`/openapi.json` stays public) | yes: shared cellkit, same in all ten finance cells | `.venv/bin/pytest -q -k 'needs_admin or docs_pages or platform_refusal'` · red without the fix: 4 failed |
+| SPEC-009 (2026-11-11): a PATCH that sends a `money` field without `expected_version` gets 428 `version_required` (fields, current version); other PATCHes unchanged | yes: shared cellkit, same in all ten finance cells | `.venv/bin/pytest -q -k money_patch` · red before the change: `assert 200 == 428` |
 
 ## Deliberately not applied
 

@@ -37,6 +37,7 @@ __all__ = [
     "test_lifecycle",
     "test_missing_reference",
     "test_money_is_exact",
+    "test_money_patch_needs_the_version",
     "test_no_docs_pages",
     "test_no_reference_across_workspaces",
     "test_numbers_fit_their_columns",
@@ -403,6 +404,36 @@ def test_version_conflict(client, owner, harness, resource):
     )
     assert stale.status_code == 409
     assert stale.json()["detail"]["version"] == record["version"]
+
+
+def test_money_patch_needs_the_version(client, owner, harness, resource):
+    """SPEC-009: a PATCH that sends a money field must name the version it changes."""
+    cell, r = harness.cell, resource
+    money = [f for f in r.fields if f.type == "money"]
+    if not money:
+        pytest.skip("no money fields")
+    record = make(client, owner, cell, r, everything=True)
+    path = f"/v1/{r.plural}/{record['id']}"
+    f = money[0]
+    change = {f.name: sample(f, 7)}
+    refused = client.patch(path, headers=owner, json=change)
+    assert refused.status_code == 428, refused.text
+    assert refused.json()["detail"] == {
+        "error": "version_required",
+        "fields": [f.name],
+        "version": record["version"],
+    }
+    assert client.get(path, headers=owner).json() == record
+    stale = client.patch(path, headers=owner, json={**change, "expected_version": 99})
+    assert stale.status_code == 409
+    done = client.patch(
+        path, headers=owner, json={**change, "expected_version": record["version"]}
+    )
+    assert done.status_code == 200, done.text
+    # Without a money field, no version is needed (names, statuses, references).
+    plain = [g for g in r.fields if g.type == "text"][:1]
+    unversioned = {g.name: sample(g, 8) for g in plain}
+    assert client.patch(path, headers=owner, json=unversioned).status_code == 200
 
 
 def test_missing_reference(client, owner, harness, resource):
