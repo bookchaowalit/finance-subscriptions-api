@@ -36,6 +36,14 @@ class Unavailable(RuntimeError):
     """The reference data cannot be read (no Kafka settings or database URL, or the broker failed)."""
 
 
+class Incomplete(Unavailable):
+    """The deadline came first: ``messages`` were read and are saved; the rest waits for next time."""
+
+    def __init__(self, messages: list[tuple[int, int, dict[str, Any]]]) -> None:
+        super().__init__("catch-up deadline")
+        self.messages = messages
+
+
 class Missing(Exception):
     """Ids not (yet) known here; the caller catches up once and retries."""
 
@@ -229,7 +237,13 @@ def catch_up(
                 (TOPIC,),
             ).fetchall()
         }
-        messages = reader.read(start, time.monotonic() + seconds)
+        # A backlog bigger than one deadline still drains: what was read is applied and its position
+        # saved, then the caller hears Unavailable (this time) and the next catch-up goes on from there.
+        incomplete: Incomplete | None = None
+        try:
+            messages = reader.read(start, time.monotonic() + seconds)
+        except Incomplete as exc:
+            incomplete, messages = exc, exc.messages
         ends: dict[int, int] = {}
         for partition, offset, envelope in messages:
             # One bad message (malformed, out of range) is skipped, never a stuck offset: each is
@@ -256,6 +270,8 @@ def catch_up(
                 " next_offset = greatest(ref_offsets.next_offset, excluded.next_offset)",
                 (TOPIC, partition, next_offset),
             )
+    if incomplete is not None:
+        raise incomplete  # after the commit: the partial progress is kept
     return len(messages)
 
 
@@ -328,7 +344,7 @@ class KafkaReader:
         finally:
             self.consumer.unassign()
         if todo:
-            raise Unavailable("catch-up deadline")
+            raise Incomplete(out)
         return out
 
 

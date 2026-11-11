@@ -809,3 +809,28 @@ def test_a_database_failure_keeps_the_position_for_a_retry(
     monkeypatch.setattr(refs, "_apply", real)
     with refs.sync_connection(harness.cell) as conn:
         assert refs.catch_up(conn, harness.cell, reader) == 1  # read again, not lost
+
+
+def test_a_catch_up_that_runs_out_of_time_keeps_what_it_read(harness, monkeypatch):
+    """A backlog larger than one deadline still drains: progress is saved, then 503 this time."""
+    from cellkit import refs
+
+    harness.superuser(f"DELETE FROM {harness.cell.schema}.ref_offsets RETURNING 1")
+
+    class _Slow:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def read(self, start, deadline):
+            self.calls += 1
+            after = start.get(0, 0)
+            if after == 0:
+                raise refs.Incomplete([(0, 0, {"probe": 1}), (0, 1, {"probe": 2})])
+            return [(0, 2, {"probe": 3})]
+
+    slow = _Slow()
+    with harness.cluster.connect(harness.cell.role("publisher")) as conn:
+        with pytest.raises(refs.Unavailable):
+            refs.catch_up(conn, harness.cell, slow)
+        assert refs.catch_up(conn, harness.cell, slow) == 1  # continued from offset 2
+    assert issubclass(refs.Incomplete, refs.Unavailable)
