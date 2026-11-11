@@ -18,6 +18,7 @@ Routes for every resource (``<plural>`` from the spec)::
     POST   /v1/<plural>                 create (Idempotency-Key; legacy_id keeps the old id)
     PATCH  /v1/<plural>/{id}            change fields (expected_version)
     DELETE /v1/<plural>/{id}            delete
+    POST   /v1/<plural>/erase           delete the caller's workspace records in batches (SPEC-008)
 
 Custom routes come from the spec's ``extend`` hook, which gets a ``Context``
 with the same building blocks.
@@ -342,6 +343,22 @@ class Work:
     conn: psycopg.Connection[Any]
     marker: uuid.UUID
     caller: Principal
+
+
+class EraseBody(BaseModel):
+    """SPEC-008: the caller names their own workspace to erase it."""
+
+    model_config = ConfigDict(extra="forbid")
+    confirm: str
+    limit: int = PydanticField(default=200, ge=1, le=500)
+
+
+class Nothing(Exception):
+    """An erase batch with no record it may delete: no execution, just the count left."""
+
+    def __init__(self, remaining: int) -> None:
+        super().__init__(remaining)
+        self.remaining = remaining
 
 
 @dataclass
@@ -1111,6 +1128,89 @@ def create_app(
             )
             publish_soon(background, caller)
             relay_soon(background, caller)
+
+        # SPEC-008: rows another row of this cell points at (a ref field) wait for that row.
+        local_children = [
+            (c, f) for c in cell.resources for f in c.refs if f.target == r.name
+        ]
+
+        @app.post(f"/v1/{r.plural}/erase", name=f"erase_{r.plural}")
+        def erase(
+            payload: EraseBody, caller: Caller, background: BackgroundTasks
+        ) -> dict[str, int]:
+            from cellkit import refs
+
+            permission = f"{cell.name}.{r.name}:delete"
+            allow(caller, permission, r.name, "erase")
+            try:
+                confirmed = uuid.UUID(payload.confirm) == caller.workspace
+            except ValueError:
+                confirmed = False
+            if not confirmed:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "invalid_value", "fields": ["confirm"]},
+                )
+            if r.referenced_by and not refs.AUTOTRUST:
+                try:
+                    refs.sync(cell)
+                except refs.Unavailable as exc:
+                    raise HTTPException(
+                        status_code=503, detail={"error": "references_unavailable"}
+                    ) from exc
+            waits = [
+                f"NOT EXISTS (SELECT 1 FROM {schema}.{c.table} x WHERE x.workspace_id = t.workspace_id"
+                f" AND x.{f.name} = t.id{' AND x.id <> t.id' if c == r else ''})"
+                for c, f in local_children
+            ]
+            if r.referenced_by:
+                waits.append(
+                    f"NOT EXISTS (SELECT 1 FROM {schema}.ref_sources s WHERE s.target_resource = %(name)s"
+                    " AND s.target_id = t.id AND NOT s.deleted)"
+                )
+            condition = " AND ".join(["TRUE", *waits])
+
+            def remaining(conn: psycopg.Connection[Any]) -> int:
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table/column names are module constants or spec-validated identifiers
+                row = conn.execute(f"SELECT count(*) AS n FROM {table}").fetchone()
+                return int(row["n"]) if row else 0
+
+            def op(work: Work) -> Plan:
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table/column names are module constants or spec-validated identifiers; values are bound as parameters
+                rows = work.conn.execute(
+                    f"SELECT t.{', t.'.join(r.select.split(', '))} FROM {table} t WHERE {condition}"
+                    " ORDER BY t.id LIMIT %(limit)s FOR UPDATE OF t SKIP LOCKED",
+                    {"name": r.name, "limit": payload.limit},
+                ).fetchall()
+                ids = [int(row["id"]) for row in rows]
+                if not ids:
+                    raise Nothing(remaining(work.conn))
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table name is a spec-validated identifier; values are bound as %s parameters
+                work.conn.execute(f"DELETE FROM {table} WHERE id = ANY(%s)", (ids,))
+                for row in rows:
+                    emit(work, r, "deleted", row, None)
+                return Plan(
+                    permission,
+                    "erase",
+                    {
+                        "action": f"{cell.name}.{r.name}.erased",
+                        "resource_type": r.name,
+                        "resource_id": "erase",
+                        "before_hash": row_hash({"ids": ids}),
+                        "after_hash": None,
+                    },
+                    {"erased": len(ids), "remaining": remaining(work.conn)},
+                )
+
+            try:
+                result: dict[str, int] = write(
+                    caller, r.name, op, precheck=(permission, "erase")
+                )
+            except Nothing as nothing:
+                return {"erased": 0, "remaining": nothing.remaining}
+            publish_soon(background, caller)
+            relay_soon(background, caller)
+            return result
 
     @app.get("/health")
     def health() -> dict[str, str | None]:

@@ -26,6 +26,7 @@ __all__ = [
     "test_authorization",
     "test_currency_is_iso_4217",
     "test_date_bounds_narrow_the_list",
+    "test_erase_empties_the_workspace",
     "test_executions_are_bound_to_the_record",
     "test_idempotent_create",
     "test_import_keeps_the_old_id",
@@ -495,6 +496,163 @@ def test_date_bounds_narrow_the_list(client, owner, harness, resource):
             "error": "invalid_value",
             "fields": [f"{f.name}_from"],
         }
+
+
+def test_erase_empties_the_workspace(
+    client, owner, harness, platform, resource, monkeypatch
+):
+    """SPEC-008: bulk erase of the caller's own records, in batches, keeping references."""
+    import hashlib
+
+    cell, r = harness.cell, resource
+    erase = f"/v1/{r.plural}/erase"
+    ws = jwt.decode(
+        owner["Authorization"].split()[1], options={"verify_signature": False}
+    )["ws"]
+    records = [make(client, owner, cell, r, n) for n in range(3)]
+    other_actor = uuid.uuid4()
+    platform.grants[other_actor] = set(cell.permissions())
+    other = harness.token(other_actor, uuid.uuid4())
+    kept = make(client, other, cell, r)
+    # AC-02: the caller names their own workspace, nothing else.
+    assert client.post(erase, headers=owner, json={}).status_code == 422
+    for bad in ({"confirm": "nope"}, {"confirm": str(uuid.uuid4())}):
+        response = client.post(erase, headers=owner, json=bad)
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == {
+            "error": "invalid_value",
+            "fields": ["confirm"],
+        }
+    assert (
+        client.post(erase, headers=owner, json={"confirm": ws, "x": 1}).status_code
+        == 422
+    )
+    for limit in (0, 501):
+        assert (
+            client.post(
+                erase, headers=owner, json={"confirm": ws, "limit": limit}
+            ).status_code
+            == 422
+        )
+    # AC-03
+    reader = uuid.uuid4()
+    platform.grants[reader] = {f"{cell.name}.{r.name}:read"}
+    assert (
+        client.post(
+            erase, headers=harness.token(reader, uuid.UUID(ws)), json={"confirm": ws}
+        ).status_code
+        == 403
+    )
+    assert client.post(erase, json={"confirm": ws}).status_code == 401
+    # AC-04: a record another record of this cell points at stays until that one goes.
+    children = [
+        (c, f) for c in cell.resources for f in c.refs if f.target == r.name and c != r
+    ]
+    child = None
+    if children:
+        c, f = children[0]
+        child = (c, make(client, owner, cell, c, **{f.name: records[0]["id"]}))
+    # AC-05: a live record of another cell points at the first record.
+    if r.referenced_by:
+        source = r.referenced_by[0]
+        harness.superuser(
+            f"INSERT INTO {cell.schema}.ref_sources (workspace_id, source, source_id, field,"
+            " target_resource, target_id) VALUES (%s, %s, 1, %s, %s, %s) RETURNING 1",
+            (ws, source.kind, source.field, r.name, records[0]["id"]),
+        )
+    blocked = 1 if (child or r.referenced_by) else 0
+    before = len(platform.executions)
+    first = client.post(erase, headers=owner, json={"confirm": ws, "limit": 1})
+    assert first.status_code == 200, first.text
+    assert first.json()["erased"] == 1
+    erased = 1
+    while True:
+        step = client.post(erase, headers=owner, json={"confirm": ws}).json()
+        erased += step["erased"]
+        if step["erased"] == 0:
+            break
+    if blocked:  # a batch with nothing it may erase makes no execution
+        count = len(platform.executions)
+        assert (
+            client.post(erase, headers=owner, json={"confirm": ws}).json()["erased"]
+            == 0
+        )
+        assert len(platform.executions) == count
+    left = {
+        i["id"] for i in client.get(f"/v1/{r.plural}", headers=owner).json()["items"]
+    }
+    assert step["remaining"] == len(left) >= blocked
+    if child is not None:
+        assert records[0]["id"] in left  # AC-04
+        c, row = child
+        assert (
+            client.delete(f"/v1/{c.plural}/{row['id']}", headers=owner).status_code
+            == 204
+        )
+    if r.referenced_by:
+        assert records[0]["id"] in left  # AC-05
+        harness.superuser(
+            f"UPDATE {cell.schema}.ref_sources SET deleted = true WHERE workspace_id = %s"
+            " RETURNING 1",
+            (ws,),
+        )
+    while True:
+        step = client.post(erase, headers=owner, json={"confirm": ws}).json()
+        erased += step["erased"]
+        if step["erased"] == 0:
+            break
+    assert step["remaining"] == 0
+    assert client.get(f"/v1/{r.plural}", headers=owner).json()["items"] == []
+    assert erased >= len(records)
+    # AC-08: the other workspace keeps its record.
+    assert client.get(f"/v1/{r.plural}/{kept['id']}", headers=other).status_code == 200
+    # AC-07: one execution per batch that erased something, bound to "erase".
+    batches = [
+        e
+        for e in list(platform.executions.values())[before:]
+        if e.get("bound_to") == "erase"
+    ]
+    assert batches
+    for e in batches:
+        assert e["permission"] == f"{cell.name}.{r.name}:delete"
+        assert e["action"] == f"{cell.name}.{r.name}.erased"
+        assert (e["resource_type"], e["resource_id"]) == (r.name, "erase")
+    first_id = records[1 if blocked else 0]["id"]
+    assert (
+        batches[0]["before_hash"]
+        == hashlib.sha256(
+            json.dumps({"ids": [first_id]}, sort_keys=True).encode()
+        ).hexdigest()
+    )
+    # AC-06: every erased record announced its deletion.
+    if r.graph is not None:
+        for record in records:
+            types = harness.superuser(
+                f"SELECT type FROM {cell.schema}.outbox WHERE subject = %s ORDER BY occurred_at",
+                (f"empire:{cell.name}:{r.name}:{record['id']}",),
+            )
+            assert types[-1][0] == f"{cell.name}.{r.name}.deleted"
+            assert [t for (t,) in types].count(f"{cell.name}.{r.name}.deleted") == 1
+    # Nothing left: still 200, no new execution.
+    count = len(platform.executions)
+    assert client.post(erase, headers=owner, json={"confirm": ws}).json() == {
+        "erased": 0,
+        "remaining": 0,
+    }
+    assert len(platform.executions) == count
+
+    # AC-05: when the references cannot be read, erase nothing (fail closed).
+    if r.referenced_by:
+        from cellkit import refs
+
+        survivor = make(client, owner, cell, r)
+        monkeypatch.setattr(refs, "AUTOTRUST", False)
+        refused = client.post(erase, headers=owner, json={"confirm": ws})
+        assert refused.status_code == 503
+        assert refused.json()["detail"] == {"error": "references_unavailable"}
+        monkeypatch.setattr(refs, "AUTOTRUST", True)
+        path = f"/v1/{r.plural}/{survivor['id']}"
+        assert client.get(path, headers=owner).status_code == 200
 
 
 def test_spec_refuses_bad_ranges():
