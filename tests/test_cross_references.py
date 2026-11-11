@@ -707,3 +707,32 @@ def test_a_bad_or_forged_message_is_skipped_and_the_position_moves_on(harness, r
         )
     }
     assert known == {good["data"]["record_id"]}
+
+
+def test_a_database_failure_keeps_the_position_for_a_retry(
+    harness, reader, monkeypatch
+):
+    import psycopg as _psycopg
+
+    from cellkit import refs
+
+    if not _referencing():
+        pytest.skip("this cell points into no other cell")
+    _, f = _referencing()[0]
+    reader.add(
+        event(f.references, "created", uuid.uuid4(), next(_ids), status="active")
+    )
+
+    def down(*_args, **_kwargs):
+        raise _psycopg.OperationalError("server closed the connection")
+
+    real = refs._apply
+    monkeypatch.setattr(refs, "_apply", down)
+    with (
+        refs.sync_connection(harness.cell) as conn,
+        pytest.raises(_psycopg.OperationalError),
+    ):
+        refs.catch_up(conn, harness.cell, reader)
+    monkeypatch.setattr(refs, "_apply", real)
+    with refs.sync_connection(harness.cell) as conn:
+        assert refs.catch_up(conn, harness.cell, reader) == 1  # read again, not lost

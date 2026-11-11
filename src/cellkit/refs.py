@@ -237,7 +237,16 @@ def catch_up(
             try:
                 with conn.transaction():
                     _apply(cur, cell, envelope)
-            except Exception:  # noqa: BLE001 - any bad message is skipped; the position moves on
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                ArithmeticError,
+                psycopg.DataError,
+                psycopg.IntegrityError,
+            ):
+                # Its content is bad: skip it. Anything else (the database or the lock failing)
+                # rolls the whole batch back, so the position stays and the batch is read again.
                 pass
             ends[partition] = max(ends.get(partition, 0), offset + 1)
         for partition, next_offset in ends.items():
