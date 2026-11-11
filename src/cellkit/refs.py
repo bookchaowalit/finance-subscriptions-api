@@ -277,13 +277,25 @@ class KafkaReader:
         meta = self.consumer.list_topics(
             TOPIC, timeout=max(1.0, deadline - time.monotonic())
         )
-        partitions = sorted(meta.topics[TOPIC].partitions)
+        topic = meta.topics.get(TOPIC)
+        # A missing topic or a metadata error is "cannot tell", never an empty topic.
+        if (
+            topic is None
+            or getattr(topic, "error", None) is not None
+            or not topic.partitions
+        ):
+            raise Unavailable("topic metadata")
+        partitions = sorted(topic.partitions)
         marks = {
             p: self.consumer.get_watermark_offsets(TopicPartition(TOPIC, p), timeout=5)
             for p in partitions
         }
+        # A stored position below the low watermark means events expired unread (retention):
+        # the reference state may be missing deletes, so refuse rather than call it complete.
+        if any(p in start and start[p] < low for p, (low, _high) in marks.items()):
+            raise Unavailable("unread history expired")
         ends = {p: high for p, (_low, high) in marks.items()}
-        # Messages before the low watermark expired (retention): start from the oldest one left.
+        # A reader with no stored position starts at the oldest message left.
         first = {p: max(start.get(p, 0), low) for p, (low, _high) in marks.items()}
         todo = {p for p in partitions if first[p] < ends[p]}
         if not todo:

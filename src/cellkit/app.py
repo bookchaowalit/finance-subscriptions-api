@@ -1116,6 +1116,8 @@ def create_app(
             from cellkit import refs
 
             if r.referenced_by and not refs.AUTOTRUST:
+                # Authorize first: a caller who may not delete must not trigger a catch-up.
+                allow(caller, f"{cell.name}.{r.name}:delete", r.name, str(record_id))
                 # SPEC-006: learn every record that points here before deciding.
                 try:
                     refs.sync(cell)

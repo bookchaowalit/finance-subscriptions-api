@@ -390,6 +390,22 @@ def test_a_referenced_record_cannot_be_deleted_until_its_dependents_go(
         assert client.delete(path, headers=headers).status_code == 204
 
 
+def test_a_delete_without_the_permission_reads_no_reference_data(
+    client, harness, platform, reader
+):
+    if not _referenced():
+        pytest.skip("nothing points at this cell")
+    r = _referenced()[0]
+    actor, ws = uuid.uuid4(), uuid.uuid4()
+    platform.grants[actor] = {
+        p for p in harness.cell.permissions() if not p.endswith(":delete")
+    }
+    headers = harness.token(actor, ws)
+    reads = reader.reads
+    assert client.delete(f"/v1/{r.plural}/1", headers=headers).status_code == 403
+    assert reader.reads == reads  # no Kafka catch-up for a caller who may not delete
+
+
 def test_a_dependent_that_moved_away_no_longer_blocks(client, harness, tenant, reader):
     if not _referenced():
         pytest.skip("nothing points at this cell")
@@ -590,14 +606,49 @@ def test_a_reader_is_built_from_complete_kafka_settings(harness, monkeypatch):
     assert built[0]["group.id"] == f"{harness.cell.name}-refs"
 
 
-def test_a_partition_whose_old_messages_expired_counts_as_read():
+def test_a_fresh_reader_starts_at_the_oldest_message_left():
     import time as _time
 
     class _Expired(_Consumer):
         def get_watermark_offsets(self, tp, timeout):
             return (5, 5)  # everything before offset 5 is gone, nothing new
 
-    assert _reader(_Expired([])).read({0: 0}, _time.monotonic() + 1) == []
+    assert _reader(_Expired([])).read({}, _time.monotonic() + 1) == []
+
+
+def test_unread_history_that_expired_is_not_reported_as_read():
+    """A stored position below the low watermark lost events (retention): fail closed."""
+    import time as _time
+
+    from cellkit import refs
+
+    class _Expired(_Consumer):
+        def get_watermark_offsets(self, tp, timeout):
+            return (5, 9)
+
+    with pytest.raises(refs.Unavailable, match="expired"):
+        _reader(_Expired([])).read({0: 2}, _time.monotonic() + 1)
+
+
+def test_a_topic_metadata_error_is_not_an_empty_topic():
+    import time as _time
+    from types import SimpleNamespace
+
+    from cellkit import refs
+
+    class _NoTopic(_Consumer):
+        def list_topics(self, topic, timeout):
+            return SimpleNamespace(
+                topics={topic: SimpleNamespace(partitions={}, error="UNKNOWN_TOPIC")}
+            )
+
+    class _Missing(_Consumer):
+        def list_topics(self, topic, timeout):
+            return SimpleNamespace(topics={})
+
+    for consumer in (_NoTopic([]), _Missing([])):
+        with pytest.raises(refs.Unavailable, match="metadata"):
+            _reader(consumer).read({}, _time.monotonic() + 1)
 
 
 def test_sync_turns_setup_failures_into_unavailable(harness, monkeypatch):
