@@ -82,21 +82,22 @@ def envelope(cell: Cell, row: Mapping[str, Any]) -> dict[str, Any]:
 def _select(schema: str) -> str:
     table = f"{schema}.outbox"
 
-    # A record's events go out in its version order: occurred_at is the transaction's start, and a
-    # write that started later can commit first (the row lock serialises them, the version tells).
-    # While an earlier version of the same subject waits out its backoff, newer ones wait too;
-    # a failed row waits for its backoff, so it cannot fill every batch.
-    def version(alias: str) -> str:
-        return f"coalesce(({alias}.payload->>'version')::bigint, 0)"
-
+    # A record's events go out in write order. relay_seq is taken when the event row is inserted,
+    # after the change itself holds the record's row lock (or its primary key, for a re-created
+    # legacy id), so the next write of that record always gets a higher number. Neither
+    # occurred_at (the transaction's start) nor the record version (it restarts at 1 when a
+    # deleted legacy id is imported again) gives that order.
+    # A record is (workspace_id, subject): two workspaces can import the same legacy id. While an
+    # earlier event of the record waits out its backoff, later ones wait too; a failed row waits
+    # for its backoff, so it cannot fill every batch.
     return (
         f"SELECT o.id, o.workspace_id, o.type, o.subject, o.execution_id, o.payload, o.occurred_at,"
         f" o.correlation_id FROM {table} o"
         " WHERE o.relayed_at IS NULL AND (o.relay_next_at IS NULL OR o.relay_next_at <= now())"
-        f" AND NOT EXISTS (SELECT 1 FROM {table} f WHERE f.subject = o.subject"
-        " AND f.relayed_at IS NULL AND f.relay_next_at > now()"
-        f" AND ({version('f')}, f.occurred_at, f.id) < ({version('o')}, o.occurred_at, o.id))"
-        f" ORDER BY o.subject, {version('o')}, o.occurred_at, o.id LIMIT %s"
+        f" AND NOT EXISTS (SELECT 1 FROM {table} f WHERE f.workspace_id = o.workspace_id"
+        " AND f.subject = o.subject AND f.relayed_at IS NULL AND f.relay_next_at > now()"
+        " AND f.relay_seq < o.relay_seq)"
+        " ORDER BY o.relay_seq LIMIT %s"
     )
 
 
@@ -151,12 +152,13 @@ def _batch(
     schema = cell.schema
     sent = failed = 0
     rows = cur.execute(_select(schema), (batch_size,)).fetchall()
-    blocked: set[str] = set()
+    blocked: set[tuple[str, str]] = set()  # (workspace_id, subject): one record
     deadline = time.monotonic() + time_budget
     for row in rows:
         if time.monotonic() >= deadline:
             break  # the rest wait for the next batch
-        if row["subject"] in blocked:
+        record = (str(row["workspace_id"]), str(row["subject"]))
+        if record in blocked:
             continue  # an earlier event of this record failed in this run
         try:
             publisher.publish(TOPIC, str(row["subject"]), envelope(cell, row))
@@ -168,7 +170,7 @@ def _batch(
                 " WHERE id = %s",
                 (type(exc).__name__, row["id"]),
             )
-            blocked.add(str(row["subject"]))
+            blocked.add(record)
             failed += 1
             continue
         cur.execute(
@@ -270,7 +272,9 @@ def main(argv: list[str] | None = None) -> int:
                 totals["sent"] += result.sent
                 totals["failed"] += result.failed
                 totals["skipped"] = result.skipped
-                if result.skipped or result.sent == 0:
+                # A batch of failures only still made progress: those rows now back off, so the
+                # next batch reaches other records. Stop when a batch found nothing to do.
+                if result.skipped or result.sent + result.failed == 0:
                     break
             backlog = oldest_unsent_seconds(conn, cell)
     except psycopg.Error as exc:

@@ -302,15 +302,19 @@ def test_a_broken_producer_setup_never_fails_the_write(
     assert record["id"] > 0
 
 
-def test_a_record_is_relayed_in_version_order(harness):
-    """occurred_at is the transaction's start; a later-starting write can commit first."""
+def test_a_record_is_relayed_in_write_order(harness):
+    """occurred_at is the transaction's start; a later-starting write can commit first.
+
+    Version 1 takes the row lock (and inserts its event) first although its transaction started
+    a minute after the one that writes version 2.
+    """
     from cellkit.relay import relay_once
 
     _drain(harness)
     r = harness.cell.resources[0]
     schema = harness.cell.schema
     ws, subject = str(uuid.uuid4()), f"empire:{harness.cell.name}:{r.name}:999999"
-    for version, ago in ((2, "2 minutes"), (1, "1 minute")):
+    for version, ago in ((1, "1 minute"), (2, "2 minutes")):
         harness.superuser(
             f"INSERT INTO {schema}.outbox (workspace_id, type, subject, payload, occurred_at)"
             f" VALUES (%s, %s, %s, %s, now() - interval '{ago}') RETURNING 1",
@@ -361,3 +365,121 @@ def test_the_relay_job_prints_counts(harness, monkeypatch, capsys):
     assert relay.main([]) == 0
     printed = json.loads(capsys.readouterr().out)
     assert set(printed) == {"sent", "failed", "skipped", "oldest_unsent_seconds"}
+
+
+# --- Review fixes (2026-11-11): workspaces, re-created ids, the job loop -------------------------
+
+
+def _insert_event(harness, ws: str, subject: str, version: int, verb: str = "updated"):
+    r = harness.cell.resources[0]
+    harness.superuser(
+        f"INSERT INTO {harness.cell.schema}.outbox (workspace_id, type, subject, payload)"
+        " VALUES (%s, %s, %s, %s) RETURNING 1",
+        (
+            ws,
+            f"{harness.cell.name}.{r.name}.{verb}",
+            subject,
+            json.dumps({"version": version, "deleted": verb == "deleted"}),
+        ),
+    )
+
+
+def _settle(harness, *subjects: str) -> None:
+    """Mark a test's rows relayed so later tests see an outbox without them."""
+    harness.superuser(
+        f"UPDATE {harness.cell.schema}.outbox SET relayed_at = now()"
+        " WHERE subject = ANY(%s) AND relayed_at IS NULL RETURNING 1",
+        (list(subjects),),
+    )
+
+
+def test_a_failure_in_one_workspace_does_not_block_the_same_subject_in_another(harness):
+    """Two workspaces may import the same legacy id, so they share a subject but not a record."""
+    from cellkit.relay import relay_once
+
+    _drain(harness)
+    r = harness.cell.resources[0]
+    subject = f"empire:{harness.cell.name}:{r.name}:999991"
+    first, second = str(uuid.uuid4()), str(uuid.uuid4())
+    _insert_event(harness, first, subject, 1)
+    _insert_event(harness, second, subject, 1)
+    fake = FakePublisher(fail=1)
+    with _publisher_conn(harness) as conn:
+        result = relay_once(conn, harness.cell, fake)
+    assert (result.sent, result.failed) == (1, 1)
+    assert [v["data"]["workspace_id"] for _, _, v in fake.sent] == [second]
+    # While the first workspace's event backs off, the second workspace's next event still goes.
+    _insert_event(harness, second, subject, 2)
+    fake = FakePublisher()
+    with _publisher_conn(harness) as conn:
+        assert relay_once(conn, harness.cell, fake).sent == 1
+    assert [v["data"]["workspace_id"] for _, _, v in fake.sent] == [second]
+    _settle(harness, subject)
+
+
+def test_a_re_created_legacy_id_keeps_its_events_in_write_order(client, owner, harness):
+    """Delete then re-import the same legacy id: versions go 1, 2, 1, the order must not."""
+    from cellkit.relay import relay_once
+
+    _drain(harness)
+    r = harness.cell.resources[0]
+    legacy = 987_651
+    record = make(client, owner, harness.cell, r, legacy_id=legacy)
+    assert (
+        client.delete(f"/v1/{r.plural}/{record['id']}", headers=owner).status_code
+        == 204
+    )
+    again = make(client, owner, harness.cell, r, legacy_id=legacy)
+    assert again["id"] == record["id"]
+    subject = f"empire:{harness.cell.name}:{r.name}:{record['id']}"
+    fake = FakePublisher()
+    with _publisher_conn(harness) as conn:
+        while relay_once(conn, harness.cell, fake).sent:
+            pass
+    assert [
+        v["type"].rsplit(".", 1)[1] for _, key, v in fake.sent if key == subject
+    ] == [
+        "created",
+        "deleted",
+        "created",
+    ]
+    assert (
+        client.delete(f"/v1/{r.plural}/{record['id']}", headers=owner).status_code
+        == 204
+    )
+    _drain(harness)
+
+
+def test_the_relay_job_goes_on_after_a_batch_of_failures_only(
+    harness, monkeypatch, capsys
+):
+    """A batch whose first row fails and whose rest wait behind it must not end the job."""
+    import functools
+
+    from cellkit import relay
+
+    _drain(harness)
+    r = harness.cell.resources[0]
+    ws = str(uuid.uuid4())
+    stuck = f"empire:{harness.cell.name}:{r.name}:999992"
+    other = f"empire:{harness.cell.name}:{r.name}:999993"
+    _insert_event(harness, ws, stuck, 1)
+    _insert_event(harness, ws, stuck, 2)
+    _insert_event(harness, ws, other, 1)
+    names = harness.cell
+    monkeypatch.setenv(
+        f"{names.env}_RELAY_DATABASE_URL",
+        f"host={harness.cluster.socket_dir} port={getattr(harness.cluster, 'port', 5434)}"
+        f" user={names.role('publisher')} dbname={names.schema}",
+    )
+    fake = FakePublisher(fail=1)
+    monkeypatch.setattr(relay, "publisher_from_env", lambda _cell: fake)
+    monkeypatch.setattr(relay, "load", lambda _path: harness.cell)
+    monkeypatch.setattr(
+        relay, "relay_once", functools.partial(relay.relay_once, batch_size=2)
+    )
+    assert relay.main([]) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert (printed["sent"], printed["failed"]) == (1, 1)
+    assert [key for _, key, _ in fake.sent] == [other]
+    _settle(harness, stuck, other)

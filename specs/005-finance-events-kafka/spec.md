@@ -8,7 +8,7 @@ Phase 2 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-005 / 1.2 |
+| Spec ID / version | SPEC-005 / 1.3 |
 | Status | approved (2026-11-11, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/005-finance-events-kafka/spec.md` (copy of the reference in finance-budgets-api) |
 | Owner (maker) | Claude Code (implementer session, 2026-11-11) |
@@ -39,7 +39,7 @@ Phase 2 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | AC-01 | **Given** any resource, **when** a record is created, updated or deleted, **then** exactly one outbox row is written in the same transaction (`type` `<cell>.<resource>.<created|updated|deleted>`, subject `empire:<cell>:<resource>:<id>`). A refused or rolled-back write leaves none. |
 | AC-02 | **Given** a resource's `graph` fields, **then** they are reference data only: enums, refs and `*_id` numbers, `scope` and `currency`. No `money`/`decimal` amount, no free text (`name`, `notes`, `description`, `institution`, …), no `json`. |
 | AC-03 | **Given** pending outbox rows, **when** the relay runs, **then** each is published to `finance.events.v1` with key = subject and an envelope 1.0.0 (`id` = outbox id, `type`, `version` 1, `occurred_at`, `producer` = cell, `correlation_id`, `causation_id` = execution id, `data` = workspace id, record id, subject, graph fields, `deleted`), and marked relayed after the broker ack. |
-| AC-04 | **Given** a publish failure, **then** the row records only the error class, waits 1, 2, 4 … 64 minutes, and later rows of the same subject wait behind it (per-record order). |
+| AC-04 | **Given** a publish failure, **then** the row records only the error class, waits 1, 2, 4 … 64 minutes, and later rows of the same record wait behind it. A record is (workspace, subject), and its events go out in write order (`relay_seq`), also across a delete and a re-import of the same legacy id. The hourly job keeps going after a batch of failures only. |
 | AC-05 | **Given** two relays at once, **then** only one works (advisory lock); the other reports `skipped`. |
 | AC-06 | **Given** a write through the API and a configured Kafka producer, **then** the API relays its own workspace's rows in a background task; a relay error never fails the request. Without Kafka settings nothing changes. |
 | AC-07 | **Given** the hourly run, **then** the job prints counts only (sent, failed, skipped, oldest unsent seconds) and posts heartbeat `finance-relay-<cell>`; a failure or a backlog older than 3 h marks it not ok. |
@@ -50,6 +50,7 @@ Phase 2 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | Interface | Change |
 |---|---|
 | Migration `*_finance_events.sql` | `outbox` + `relayed_at`, `relay_attempts`, `relay_next_at`, `relay_error`; pending index; `UPDATE` on those columns to `<cell>_api` and `<cell>_publisher` |
+| Migration `0005_relay_order.sql` | `outbox.relay_seq` (identity, taken at insert; existing rows numbered in the old order); pending index on `relay_seq` |
 | Kafka | topic `finance.events.v1` (2 partitions); SASL user `finance-<cell>-producer` (write); `lake-sink` read |
 | Env (API, Railway) | optional `<CELL>_KAFKA_BOOTSTRAP`, `_KAFKA_CA_PEM`, `_KAFKA_USERNAME`, `_KAFKA_PASSWORD` |
 | Env (relay job, GitHub secrets) | the same four plus `<CELL>_RELAY_DATABASE_URL`, `HEARTBEAT_TOKEN` |
@@ -83,6 +84,7 @@ Phase 2 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | 1.0 | 2026-11-11 | finance events to Kafka | owner, chat 2026-11-11 |
 | 1.1 | 2026-11-11 | Codex review: the inline relay builds the producer inside its guarded task (bad Kafka settings no longer fail the write); a record's events go out in record-version order, not transaction-start order. Red: `test_a_broken_producer_setup_never_fails_the_write`, `test_a_record_is_relayed_in_version_order`; green: 327 passed, 8 skipped, 1 xfailed  | owner, chat 2026-11-11 |
 | 1.2 | 2026-11-11 | Security review: the hourly relay waits up to 30 s for the relay lock (`wait=30`, `lock_timeout`) instead of skipping, so frequent inline relays of one workspace cannot starve the sweep of every workspace. Red: `test_the_hourly_relay_waits_for_an_inline_relay_instead_of_skipping`; green: 356 passed, 8 skipped, 1 xfailed  | owner, chat 2026-11-11 |
+| 1.3 | 2026-11-11 | Codex review round 3: (1) backoff and the in-run block are per record = (workspace, subject), not per subject (two workspaces may import the same legacy id); (2) a record's events go out in write order: new `relay_seq` (migration `0005_relay_order.sql`) instead of record version, which restarts at 1 when a deleted legacy id is imported again; (3) the hourly job stops only when a batch found nothing (sent + failed = 0), not after a batch of failures only. Red (old code, new tests): `test_a_failure_in_one_workspace_does_not_block_the_same_subject_in_another`, `test_a_re_created_legacy_id_keeps_its_events_in_write_order`, `test_the_relay_job_goes_on_after_a_batch_of_failures_only` failed; `test_a_record_is_relayed_in_version_order` renamed `..._in_write_order` (rows inserted in lock order). Green: 360 passed, 8 skipped, 1 xfailed; mypy, ruff check and format clean | owner, chat 2026-11-11 (review fixes inside the approved scope) |
 
 ## Approval
 
