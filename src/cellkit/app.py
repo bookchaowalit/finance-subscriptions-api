@@ -636,6 +636,38 @@ def create_app(
 
         background.add_task(run)
 
+    def relay_soon(background: BackgroundTasks, caller: Principal) -> None:
+        """SPEC-005: relay this workspace's new events to Kafka right after the write (best effort)."""
+        from cellkit import relay
+
+        if not relay.configured(cell):
+            return
+
+        def run() -> None:
+            try:
+                # Built here, inside the guard: bad Kafka settings must not fail the request.
+                publisher = relay.publisher_from_env(cell)
+                if publisher is None:
+                    return
+                with bound(caller) as conn:
+                    relay.relay_once(
+                        conn, cell, publisher, batch_size=20, time_budget=10
+                    )
+                    # bound() opened the transaction (workspace setting); relay_once ran in a savepoint.
+                    conn.commit()
+            except Exception as exc:  # noqa: BLE001 - the hourly relay retries; never fail the request for this
+                capture(exc)
+                log.warning(
+                    json.dumps(
+                        {
+                            "event": f"{cell.name}.inline_relay_failed",
+                            "error": type(exc).__name__,
+                        }
+                    )
+                )
+
+        background.add_task(run)
+
     def load(
         conn: psycopg.Connection[Any],
         r: Resource,
@@ -915,6 +947,7 @@ def create_app(
                 idempotency_key=idempotency_key,
             )
             publish_soon(background, caller)
+            relay_soon(background, caller)
             return out(row)
 
         @app.patch(f"/v1/{r.plural}/{{record_id}}", name=f"update_{r.name}")
@@ -976,6 +1009,7 @@ def create_app(
                 precheck=(f"{cell.name}.{r.name}:write", str(record_id)),
             )
             publish_soon(background, caller)
+            relay_soon(background, caller)
             return out(row)
 
         @app.delete(
@@ -1000,6 +1034,7 @@ def create_app(
                 precheck=(f"{cell.name}.{r.name}:delete", str(record_id)),
             )
             publish_soon(background, caller)
+            relay_soon(background, caller)
 
     @app.get("/health")
     def health() -> dict[str, str | None]:

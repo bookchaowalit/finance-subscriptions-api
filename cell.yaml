@@ -5,6 +5,8 @@ cell: subscriptions
 title: Subscriptions
 resources:
   subscription:
+    # SPEC-005: reference data only in events (no amounts, names or notes).
+    graph: [scope, status, billing_interval, currency, started_on, next_billing_date, cancelled_on, auto_renew, account_id, project_id, goal_id]
     legacy_columns:
       scope: owner_scope
     filters:
@@ -78,6 +80,8 @@ resources:
       notes: &id001
         type: text
   subscription-review:
+    # SPEC-005: reference data only in events (no amounts, names or notes).
+    graph: [subscription_id, review_date, period_start, period_end, verdict, next_review_date]
     filters:
     - subscription_id
     - verdict
@@ -133,6 +137,8 @@ resources:
       next_review_date:
         type: date
   subscription-alias:
+    # SPEC-005: reference data only in events (no amounts, names or notes).
+    graph: [subscription_id, mapping_status]
     table: subscription_aliases
     plural: subscription-aliases
     filters:

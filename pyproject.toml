@@ -12,6 +12,8 @@ dependencies = [
     "httpx>=0.27,<1",
     "pyyaml>=6,<7",
     "sentry-sdk>=2.72,<3",
+    # SPEC-005 Kafka relay (kafka-python-ng cannot authenticate to Kafka 4.x)
+    "confluent-kafka>=2.6,<3",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +32,7 @@ subscriptions-mcp = "cellkit.mcp:main"
 subscriptions-api = "cellkit.server:api"
 subscriptions-publish = "cellkit.server:run_publish"
 subscriptions-db = "cellkit.server:run_db"
+subscriptions-relay = "cellkit.relay:run"
 
 [build-system]
 requires = ["setuptools>=69"]

@@ -177,7 +177,7 @@ def test_saas_migration_equals_a_fresh_schema(harness):
         conn.execute(sqlgen.migration(spec))
         conn.commit()
         fresh = _describe(conn, spec.schema)
-    # The harness database ran every file in migrations/ (the SPEC-003 one last).
+    # The harness database ran every file in migrations/.
     with harness.cluster.connect("postgres") as conn:
         upgraded = _describe(conn, spec.schema)
     assert upgraded == fresh
@@ -185,8 +185,13 @@ def test_saas_migration_equals_a_fresh_schema(harness):
 
 def test_saas_migration_keeps_existing_rows(harness):
     spec = harness.cell
-    files = sorted((ROOT / "migrations").glob("*.sql"))
-    assert files[-1].name.endswith("_saas_money_currency_scope.sql")
+    every = sorted((ROOT / "migrations").glob("*.sql"))
+    at = next(
+        i
+        for i, p in enumerate(every)
+        if p.name.endswith("_saas_money_currency_scope.sql")
+    )
+    files = every[: at + 1]
     _fresh_db(harness, "saas_upgrade")
     ws = uuid.uuid4()
     with harness.cluster.connect("postgres", "saas_upgrade") as conn:

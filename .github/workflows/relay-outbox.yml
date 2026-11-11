@@ -1,0 +1,82 @@
+# Outbox → Kafka finance.events.v1 (SPEC-005, ADR-0008). Runs before the lake sink
+# (data-lake-pipelines event-sink at :05), so an event reaches Bronze within the hour.
+#
+# Public repository: GitHub-hosted runner and a public log, so only counts are printed. The relay
+# role (subscriptions_publisher) may only read the outbox and mark its relay columns. Failures reach
+# Telegram through the uptime Worker heartbeat `finance-relay-subscriptions`.
+name: Relay outbox (finance events → Kafka)
+
+on:
+  # Scheduled by the jobs queue (platform-jobs-worker job `finance-relay-subscriptions`, cron "49 * * * *" UTC).
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "who started the run"
+        type: choice
+        options: [manual, jobs-queue]
+        default: manual
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-outbox
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the relay from uv.lock
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.13.1
+          uv sync --frozen --no-dev
+
+      - name: Relay
+        id: relay
+        env:
+          SUBSCRIPTIONS_RELAY_DATABASE_URL: ${{ secrets.SUBSCRIPTIONS_RELAY_DATABASE_URL }}
+          SUBSCRIPTIONS_KAFKA_BOOTSTRAP: ${{ secrets.SUBSCRIPTIONS_KAFKA_BOOTSTRAP }}
+          SUBSCRIPTIONS_KAFKA_CA_PEM: ${{ secrets.SUBSCRIPTIONS_KAFKA_CA_PEM }}
+          SUBSCRIPTIONS_KAFKA_USERNAME: ${{ secrets.SUBSCRIPTIONS_KAFKA_USERNAME }}
+          SUBSCRIPTIONS_KAFKA_PASSWORD: ${{ secrets.SUBSCRIPTIONS_KAFKA_PASSWORD }}
+        run: |
+          set +e
+          .venv/bin/subscriptions-relay > "$RUNNER_TEMP/relay.json" 2> "$RUNNER_TEMP/relay.err"
+          code=$?
+          set -e
+          # The relay prints counts and an error class only; stderr stays out of the public log.
+          jq . "$RUNNER_TEMP/relay.json" | tee -a "$GITHUB_STEP_SUMMARY" || echo "relay: no result (exit $code)"
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "backlog=$(jq -r '.oldest_unsent_seconds // 0' "$RUNNER_TEMP/relay.json" 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+
+      - name: Heartbeat
+        if: ${{ always() }}
+        env:
+          HEARTBEAT_TOKEN: ${{ secrets.HEARTBEAT_TOKEN }}
+          CODE: ${{ steps.relay.outputs.exit_code }}
+          BACKLOG: ${{ steps.relay.outputs.backlog }}
+        run: |
+          failed=()
+          if [ "$CODE" != "0" ]; then failed+=("relay"); fi
+          # Rows older than 3 h are stuck (failing with backoff, or the relay keeps losing the lock).
+          if [ "${BACKLOG:-0}" -gt 10800 ]; then failed+=("backlog"); fi
+          if [ ${#failed[@]} -eq 0 ]; then
+            body='{"ok":true,"failed":[]}'
+          else
+            body=$(jq -cn '{ok:false, failed:$ARGS.positional}' --args "${failed[@]}")
+          fi
+          echo "heartbeat: $body"
+          curl -fsS -X POST https://monitor.bookchaowalit.com/heartbeat/finance-relay-subscriptions \
+            -H "Authorization: Bearer $HEARTBEAT_TOKEN" -H "Content-Type: application/json" -d "$body"
+          [ ${#failed[@]} -eq 0 ]
