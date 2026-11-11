@@ -173,10 +173,11 @@ def migration(cell: Cell) -> str:
         "    relayed_at      timestamptz,",
         "    relay_attempts  integer NOT NULL DEFAULT 0,",
         "    relay_next_at   timestamptz,",
-        "    relay_error     text",
+        "    relay_error     text,",
+        "    seq             bigint GENERATED ALWAYS AS IDENTITY",
         ");",
         f"CREATE INDEX outbox_pending ON {s}.outbox (next_attempt_at) WHERE published_at IS NULL;",
-        f"CREATE INDEX outbox_unrelayed ON {s}.outbox (occurred_at, id) WHERE relayed_at IS NULL;",
+        f"CREATE INDEX outbox_unrelayed ON {s}.outbox (seq) WHERE relayed_at IS NULL;",
         "",
         "DO $$",
         "DECLARE",
@@ -208,8 +209,67 @@ def migration(cell: Cell) -> str:
         f"GRANT UPDATE (published_at, attempts, next_attempt_at, last_error) ON {s}.outbox TO {publisher};",
         f"GRANT UPDATE (relayed_at, relay_attempts, relay_next_at, relay_error) ON {s}.outbox TO {publisher};",
         "",
+        *reference_tables(cell),
     ]
     return "\n".join(parts)
+
+
+def reference_tables(cell: Cell) -> list[str]:
+    """SPEC-006: event-fed copies of the ids this cell points at and of the records that point here.
+
+    The API reads them inside its workspace (RLS); the publisher role writes them for every workspace
+    while it catches up from Kafka, and keeps its read position in ref_offsets.
+    """
+    s = cell.schema
+    api, publisher = cell.role("api"), cell.role("publisher")
+    lines = [
+        "-- SPEC-006: cross-service references, fed by finance.events.v1.",
+        f"CREATE TABLE {s}.ref_targets (",
+        "    workspace_id   uuid NOT NULL,",
+        "    target         text NOT NULL,",
+        "    record_id      bigint NOT NULL,",
+        "    status         text,",
+        "    deleted        boolean NOT NULL DEFAULT false,",
+        "    record_version bigint NOT NULL DEFAULT 0,",
+        "    event_seq      bigint NOT NULL DEFAULT 0,",
+        "    updated_at     timestamptz NOT NULL DEFAULT now(),",
+        "    PRIMARY KEY (workspace_id, target, record_id)",
+        ");",
+        f"CREATE TABLE {s}.ref_sources (",
+        "    workspace_id    uuid NOT NULL,",
+        "    source          text NOT NULL,",
+        "    source_id       bigint NOT NULL,",
+        "    field           text NOT NULL,",
+        "    target_resource text NOT NULL,",
+        "    target_id       bigint,",
+        "    deleted         boolean NOT NULL DEFAULT false,",
+        "    record_version  bigint NOT NULL DEFAULT 0,",
+        "    event_seq       bigint NOT NULL DEFAULT 0,",
+        "    updated_at      timestamptz NOT NULL DEFAULT now(),",
+        "    PRIMARY KEY (workspace_id, source, source_id, field)",
+        ");",
+        f"CREATE INDEX ref_sources_live ON {s}.ref_sources (workspace_id, target_resource, target_id) WHERE NOT deleted;",
+        f"CREATE TABLE {s}.ref_offsets (",
+        "    topic       text NOT NULL,",
+        "    partition   integer NOT NULL,",
+        "    next_offset bigint NOT NULL,",
+        "    PRIMARY KEY (topic, partition)",
+        ");",
+    ]
+    for t in ("ref_targets", "ref_sources"):
+        lines += [
+            f"ALTER TABLE {s}.{t} ENABLE ROW LEVEL SECURITY;",
+            f"ALTER TABLE {s}.{t} FORCE ROW LEVEL SECURITY;",
+            (
+                f"CREATE POLICY workspace_isolation ON {s}.{t}"
+                f" USING (workspace_id = {s}.current_workspace());"
+            ),
+            f"CREATE POLICY publisher_sync ON {s}.{t} TO {publisher} USING (true) WITH CHECK (true);",
+            f"GRANT SELECT ON {s}.{t} TO {api};",
+            f"GRANT SELECT, INSERT, UPDATE ON {s}.{t} TO {publisher};",
+        ]
+    lines += [f"GRANT SELECT, INSERT, UPDATE ON {s}.ref_offsets TO {publisher};", ""]
+    return lines
 
 
 def roles(cell: Cell) -> str:

@@ -36,6 +36,7 @@ TOPIC = "finance.events.v1"
 ENVELOPE_VERSION = 1
 PUBLISH_TIMEOUT_SECONDS = 10.0
 BATCH_TIME_BUDGET_SECONDS = 120.0
+BATCH_SIZE = 100
 MAX_BACKOFF_MINUTES_EXPONENT = 6  # 1, 2, 4 … 64 minutes
 
 
@@ -60,7 +61,7 @@ def envelope(cell: Cell, row: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(row["payload"])
     subject = str(row["subject"])
     deleted = bool(payload.pop("deleted", False))
-    payload.pop("version", None)
+    record_version = int(payload.pop("version", 0) or 0)
     return {
         "id": str(row["id"]),
         "type": str(row["type"]),
@@ -74,6 +75,9 @@ def envelope(cell: Cell, row: Mapping[str, Any]) -> dict[str, Any]:
             "workspace_id": str(row["workspace_id"]),
             "record_id": int(subject.rsplit(":", 1)[1]),
             "subject": subject,
+            "record_version": record_version,
+            # The producer's insert order: consumers keep the state of the highest seq per record.
+            "event_seq": int(row["seq"]) if row.get("seq") is not None else None,
             "deleted": deleted,
         },
     }
@@ -81,22 +85,18 @@ def envelope(cell: Cell, row: Mapping[str, Any]) -> dict[str, Any]:
 
 def _select(schema: str) -> str:
     table = f"{schema}.outbox"
-
-    # A record's events go out in its version order: occurred_at is the transaction's start, and a
-    # write that started later can commit first (the row lock serialises them, the version tells).
-    # While an earlier version of the same subject waits out its backoff, newer ones wait too;
-    # a failed row waits for its backoff, so it cannot fill every batch.
-    def version(alias: str) -> str:
-        return f"coalesce(({alias}.payload->>'version')::bigint, 0)"
-
+    # A record's events go out in insert order (seq): the row lock serialises writes to one record,
+    # so a later insert is a later commit, even when its transaction started first (occurred_at) or
+    # it re-created a deleted legacy id (its version starts again at 1). While an earlier event of
+    # the same record of the same workspace waits out its backoff, later ones wait too.
     return (
         f"SELECT o.id, o.workspace_id, o.type, o.subject, o.execution_id, o.payload, o.occurred_at,"
-        f" o.correlation_id FROM {table} o"
+        f" o.correlation_id, o.seq FROM {table} o"
         " WHERE o.relayed_at IS NULL AND (o.relay_next_at IS NULL OR o.relay_next_at <= now())"
-        f" AND NOT EXISTS (SELECT 1 FROM {table} f WHERE f.subject = o.subject"
-        " AND f.relayed_at IS NULL AND f.relay_next_at > now()"
-        f" AND ({version('f')}, f.occurred_at, f.id) < ({version('o')}, o.occurred_at, o.id))"
-        f" ORDER BY o.subject, {version('o')}, o.occurred_at, o.id LIMIT %s"
+        f" AND NOT EXISTS (SELECT 1 FROM {table} f WHERE f.workspace_id = o.workspace_id"
+        " AND f.subject = o.subject AND f.relayed_at IS NULL AND f.relay_next_at > now()"
+        " AND f.seq < o.seq)"
+        " ORDER BY o.seq LIMIT %s"
     )
 
 
@@ -151,12 +151,13 @@ def _batch(
     schema = cell.schema
     sent = failed = 0
     rows = cur.execute(_select(schema), (batch_size,)).fetchall()
-    blocked: set[str] = set()
+    blocked: set[tuple[str, str]] = set()
     deadline = time.monotonic() + time_budget
     for row in rows:
         if time.monotonic() >= deadline:
             break  # the rest wait for the next batch
-        if row["subject"] in blocked:
+        record = (str(row["workspace_id"]), str(row["subject"]))
+        if record in blocked:
             continue  # an earlier event of this record failed in this run
         try:
             publisher.publish(TOPIC, str(row["subject"]), envelope(cell, row))
@@ -168,7 +169,7 @@ def _batch(
                 " WHERE id = %s",
                 (type(exc).__name__, row["id"]),
             )
-            blocked.add(str(row["subject"]))
+            blocked.add(record)
             failed += 1
             continue
         cur.execute(
@@ -266,18 +267,36 @@ def main(argv: list[str] | None = None) -> int:
         with psycopg.connect(url, connect_timeout=15) as conn:
             started = time.monotonic()
             while time.monotonic() - started < BATCH_TIME_BUDGET_SECONDS:
-                result = relay_once(conn, cell, publisher, wait=30)
+                result = relay_once(conn, cell, publisher, BATCH_SIZE, wait=30)
                 totals["sent"] += result.sent
                 totals["failed"] += result.failed
                 totals["skipped"] = result.skipped
-                if result.skipped or result.sent == 0:
+                # A batch that failed entirely still moved on: failed rows wait out their backoff.
+                if result.skipped or result.sent + result.failed == 0:
                     break
             backlog = oldest_unsent_seconds(conn, cell)
+            refs_read = _catch_up_references(conn, cell)
     except psycopg.Error as exc:
         print(json.dumps({"error": type(exc).__name__}))
         return 1
-    print(json.dumps({**totals, "oldest_unsent_seconds": round(backlog)}))
+    print(
+        json.dumps(
+            {**totals, "oldest_unsent_seconds": round(backlog), "refs_read": refs_read}
+        )
+    )
     return 1 if totals["failed"] else 0
+
+
+def _catch_up_references(conn: psycopg.Connection[Any], cell: Cell) -> int:
+    """SPEC-006: the hourly job also keeps the reference tables fresh (same publisher role)."""
+    from cellkit import refs
+
+    if not refs.has_references(cell):
+        return 0
+    reader = refs.reader_from_env(cell)
+    if reader is None:
+        return 0
+    return refs.catch_up(conn, cell, reader, seconds=60)
 
 
 def run() -> None:

@@ -175,7 +175,15 @@ def test_relay_publishes_envelopes_and_marks_them(client, owner, harness):
     assert data["subject"] == key
     assert uuid.UUID(data["workspace_id"])
     assert data["deleted"] is False
-    assert set(data) == {"workspace_id", "record_id", "subject", "deleted", *r.graph}
+    assert set(data) == {
+        "workspace_id",
+        "record_id",
+        "subject",
+        "record_version",
+        "event_seq",
+        "deleted",
+        *r.graph,
+    }
     json.dumps(envelope)  # JSON-safe as sent
 
 
@@ -302,37 +310,112 @@ def test_a_broken_producer_setup_never_fails_the_write(
     assert record["id"] > 0
 
 
-def test_a_record_is_relayed_in_version_order(harness):
-    """occurred_at is the transaction's start; a later-starting write can commit first."""
+def _insert_event(harness, ws, subject, version, ago, verb="updated"):
+    r = harness.cell.resources[0]
+    harness.superuser(
+        f"INSERT INTO {harness.cell.schema}.outbox (workspace_id, type, subject, payload, occurred_at)"
+        f" VALUES (%s, %s, %s, %s, now() - interval '{ago}') RETURNING 1",
+        (
+            str(ws),
+            f"{harness.cell.name}.{r.name}.{verb}",
+            subject,
+            json.dumps({"version": version, "deleted": verb == "deleted"}),
+        ),
+    )
+
+
+def _sent_versions(fake, subject):
+    return [
+        (v["type"].rsplit(".", 1)[1], v["data"]["record_version"])
+        for _, key, v in fake.sent
+        if key == subject
+    ]
+
+
+def test_a_record_is_relayed_in_write_order(harness):
+    """occurred_at is the transaction's start; the row lock makes the insert order the commit order."""
     from cellkit.relay import relay_once
 
     _drain(harness)
     r = harness.cell.resources[0]
-    schema = harness.cell.schema
-    ws, subject = str(uuid.uuid4()), f"empire:{harness.cell.name}:{r.name}:999999"
-    for version, ago in ((2, "2 minutes"), (1, "1 minute")):
-        harness.superuser(
-            f"INSERT INTO {schema}.outbox (workspace_id, type, subject, payload, occurred_at)"
-            f" VALUES (%s, %s, %s, %s, now() - interval '{ago}') RETURNING 1",
-            (
-                ws,
-                f"{harness.cell.name}.{r.name}.updated",
-                subject,
-                json.dumps({"version": version, "deleted": False}),
-            ),
-        )
+    ws, subject = uuid.uuid4(), f"empire:{harness.cell.name}:{r.name}:999999"
+    _insert_event(harness, ws, subject, 1, "1 minute")
+    _insert_event(
+        harness, ws, subject, 2, "2 minutes"
+    )  # started earlier, committed later
     fake = FakePublisher()
     with _publisher_conn(harness) as conn:
         relay_once(conn, harness.cell, fake)
-    versions = [
-        harness.superuser(
-            f"SELECT payload->>'version' FROM {schema}.outbox WHERE id = %s",
-            (v["id"],),
-        )[0][0]
-        for _, key, v in fake.sent
-        if key == subject
+    assert _sent_versions(fake, subject) == [("updated", 1), ("updated", 2)]
+
+
+def test_a_recreated_record_keeps_its_order(harness):
+    """An import may re-create a deleted legacy id; its version starts again at 1."""
+    from cellkit.relay import relay_once
+
+    _drain(harness)
+    r = harness.cell.resources[0]
+    ws, subject = uuid.uuid4(), f"empire:{harness.cell.name}:{r.name}:999998"
+    _insert_event(harness, ws, subject, 1, "3 minutes", "created")
+    _insert_event(harness, ws, subject, 2, "2 minutes", "deleted")
+    _insert_event(harness, ws, subject, 1, "1 minute", "created")
+    fake = FakePublisher()
+    with _publisher_conn(harness) as conn:
+        relay_once(conn, harness.cell, fake)
+    assert _sent_versions(fake, subject) == [
+        ("created", 1),
+        ("deleted", 2),
+        ("created", 1),
     ]
-    assert versions == ["1", "2"]
+
+
+def test_one_workspaces_failing_event_never_blocks_another(harness):
+    """Legacy imports keep their old ids, so two workspaces can share a subject."""
+    from cellkit.relay import relay_once
+
+    _drain(harness)
+    r = harness.cell.resources[0]
+    subject = f"empire:{harness.cell.name}:{r.name}:999997"
+    a, b = uuid.uuid4(), uuid.uuid4()
+    _insert_event(harness, a, subject, 1, "2 minutes")
+    _insert_event(harness, b, subject, 1, "1 minute")
+    with _publisher_conn(harness) as conn:
+        first = relay_once(conn, harness.cell, FakePublisher(fail=1))
+        fake = FakePublisher()
+        second = relay_once(conn, harness.cell, fake)
+    assert (first.sent, first.failed) == (1, 1)
+    assert (second.sent, second.failed) == (
+        0,
+        0,
+    )  # a waits out its backoff; b already went
+
+
+def test_the_job_moves_past_a_batch_that_failed_entirely(harness, monkeypatch, capsys):
+    from cellkit import relay
+
+    _drain(harness)
+    r = harness.cell.resources[0]
+    for n in (1, 2):
+        _insert_event(
+            harness,
+            uuid.uuid4(),
+            f"empire:{harness.cell.name}:{r.name}:99990{n}",
+            1,
+            f"{n} minutes",
+        )
+    monkeypatch.setattr(relay, "BATCH_SIZE", 1)
+    monkeypatch.setenv(
+        f"{harness.cell.env}_RELAY_DATABASE_URL",
+        f"host={harness.cluster.socket_dir} port={getattr(harness.cluster, 'port', 5434)}"
+        f" user={harness.cell.role('publisher')} dbname={harness.cell.schema}",
+    )
+    monkeypatch.setattr(
+        relay, "publisher_from_env", lambda _cell: FakePublisher(fail=1)
+    )
+    monkeypatch.setattr(relay, "load", lambda _path: harness.cell)
+    relay.main([])
+    printed = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert (printed["sent"], printed["failed"]) == (1, 1)
 
 
 def test_without_kafka_settings_nothing_is_published(monkeypatch):
@@ -360,4 +443,10 @@ def test_the_relay_job_prints_counts(harness, monkeypatch, capsys):
     monkeypatch.setattr(relay, "load", lambda _path: harness.cell)
     assert relay.main([]) == 0
     printed = json.loads(capsys.readouterr().out)
-    assert set(printed) == {"sent", "failed", "skipped", "oldest_unsent_seconds"}
+    assert set(printed) == {
+        "sent",
+        "failed",
+        "skipped",
+        "oldest_unsent_seconds",
+        "refs_read",
+    }

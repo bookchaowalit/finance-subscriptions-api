@@ -88,6 +88,10 @@ class Field:
     )
     json_kind: str | None = None  # json: array | object
     unique: bool = False
+    # SPEC-006: a bigint id in another finance cell ("<cell>.<resource>"), checked on write against
+    # the event-fed ref_targets table; targets whose status is in refuse_status are refused.
+    references: str | None = None
+    refuse_status: tuple[str, ...] = ()
 
     @property
     def nullable(self) -> bool:
@@ -99,6 +103,22 @@ class Field:
         if self.to is None:
             raise SpecError(f"{self.name}: not a ref field")
         return self.to
+
+
+@dataclass(frozen=True)
+class RefSource:
+    """A field of another cell that points at this resource (``referenced_by``, SPEC-006)."""
+
+    cell: str
+    resource: str
+    field: str
+
+    @property
+    def kind(self) -> str:
+        return f"{self.cell}.{self.resource}"
+
+
+REFERENCE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 
 
 @dataclass(frozen=True)
@@ -120,6 +140,8 @@ class Resource:
     legacy_values: tuple[tuple[str, tuple[tuple[Any, Any], ...]], ...] = ()
     # Old column names per field ({field: old_column}) for fields renamed since the SQLite tables.
     legacy_columns: tuple[tuple[str, str], ...] = ()
+    # SPEC-006: fields of other cells that point here; a referenced record cannot be deleted.
+    referenced_by: tuple[RefSource, ...] = ()
 
     def field(self, name: str) -> Field:
         for f in self.fields:
@@ -228,6 +250,14 @@ def _field(name: str, raw: dict[str, Any], resource: str) -> Field:
         raise SpecError(f"{resource}.{name}: max_length must be an integer")
     if raw.get("json") not in (None, "array", "object"):
         raise SpecError(f"{resource}.{name}: json must be array or object")
+    if raw.get("references") is not None and (
+        kind not in ("bigint", "int") or not REFERENCE.match(str(raw["references"]))
+    ):
+        raise SpecError(
+            f"{resource}.{name}: references needs a bigint field and '<cell>.<resource>'"
+        )
+    if raw.get("refuse_status") and not raw.get("references"):
+        raise SpecError(f"{resource}.{name}: refuse_status needs references")
     if "on_delete" in raw:
         raise SpecError(
             f"{resource}.{name}: refs are always restrict (delete the referencing rows first)"
@@ -257,6 +287,8 @@ def _field(name: str, raw: dict[str, Any], resource: str) -> Field:
         "to",
         "json",
         "unique",
+        "references",
+        "refuse_status",
     }
     if unknown:
         raise SpecError(f"{resource}.{name}: unknown keys {sorted(unknown)}")
@@ -272,6 +304,8 @@ def _field(name: str, raw: dict[str, Any], resource: str) -> Field:
         to=raw.get("to"),
         json_kind=raw.get("json"),
         unique=bool(raw.get("unique")),
+        references=raw.get("references"),
+        refuse_status=tuple(raw.get("refuse_status") or ()),
     )
 
 
@@ -314,6 +348,7 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
             "legacy_id_from",
             "legacy_values",
             "legacy_columns",
+            "referenced_by",
         }
         if unknown:
             raise SpecError(f"{rname}: unknown keys {sorted(unknown)}")
@@ -334,6 +369,14 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
                 raise SpecError(
                     f"{rname}: legacy_columns names unknown field {field_name!r}"
                 )
+        referenced_by = []
+        for entry in raw.get("referenced_by") or ():
+            parts = str(entry).split(".")
+            if len(parts) != 3 or not all(parts):
+                raise SpecError(
+                    f"{rname}: referenced_by entries are '<cell>.<resource>.<field>'"
+                )
+            referenced_by.append(RefSource(*parts))
         resources.append(
             Resource(
                 name=rname,
@@ -349,6 +392,7 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
                 legacy_id_from=raw.get("legacy_id_from", "id"),
                 legacy_values=legacy_values,
                 legacy_columns=legacy_columns,
+                referenced_by=tuple(referenced_by),
             )
         )
     if not resources:

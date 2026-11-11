@@ -5,6 +5,9 @@ cell: subscriptions
 title: Subscriptions
 resources:
   subscription:
+    # SPEC-006: fields of other cells that point here (a referenced record cannot be deleted).
+    referenced_by:
+    - transactions.transaction.subscription_id
     # SPEC-005: reference data only in events (no amounts, names or notes).
     graph: [scope, status, billing_interval, currency, started_on, next_billing_date, cancelled_on, auto_renew, account_id, project_id, goal_id]
     legacy_columns:
@@ -70,6 +73,8 @@ resources:
         type: bool
         default: true
       account_id:
+        references: finance-accounts.account
+        refuse_status: [closed]
         type: bigint
       project_id:
         type: bigint

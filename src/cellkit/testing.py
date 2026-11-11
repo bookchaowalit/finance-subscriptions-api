@@ -8,6 +8,7 @@ the outbox for each of its resources.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import time
@@ -200,6 +201,16 @@ def harness(request) -> Iterator[Harness]:
         )
         .decode()
     )
+    from cellkit import refs
+
+    # SPEC-006: writes accept any cross-service id unless a test turns this off (and feeds a reader).
+    refs.AUTOTRUST = True
+    # Never reach a real broker or database from tests, whatever the developer's shell exports.
+    for name in [n for n in os.environ if n.startswith(f"{cell.env}_KAFKA_")] + [
+        f"{cell.env}_REFS_DATABASE_URL",
+        f"{cell.env}_RELAY_DATABASE_URL",
+    ]:
+        os.environ.pop(name, None)
     try:
         cluster.bootstrap()
         migrate(cluster)

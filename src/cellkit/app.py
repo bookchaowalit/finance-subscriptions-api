@@ -668,6 +668,42 @@ def create_app(
 
         background.add_task(run)
 
+    def referenced(run: Callable[[], Any]) -> Any:
+        """SPEC-006: run a write; on an unknown reference catch up from Kafka once, then retry."""
+        from cellkit import refs
+
+        try:
+            return run()
+        except refs.Missing:
+            try:
+                refs.sync(cell)
+            except refs.Unavailable as exc:
+                raise HTTPException(
+                    status_code=503, detail={"error": "references_unavailable"}
+                ) from exc
+            try:
+                return run()
+            except refs.Missing as again:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "reference_not_found", "fields": again.fields},
+                ) from again
+
+    def check_references(work: Work, r: Resource, data: dict[str, Any]) -> None:
+        from cellkit import refs
+
+        fields = {
+            f: data[f.name]
+            for f in r.fields
+            if f.references and data.get(f.name) is not None
+        }
+        try:
+            refs.check(work.conn, cell, fields)
+        except refs.Refused as exc:
+            raise HTTPException(
+                status_code=422, detail={"error": exc.error, "fields": exc.fields}
+            ) from exc
+
     def load(
         conn: psycopg.Connection[Any],
         r: Resource,
@@ -910,6 +946,7 @@ def create_app(
                             audit(r, "created", reserved, None, existing),
                             existing,
                         )
+                check_references(work, r, data)
                 row_data = stored(r, data)
                 columns, params = (
                     ["workspace_id", *row_data],
@@ -939,12 +976,14 @@ def create_app(
                     replay_safe=False,
                 )
 
-            row = write(
-                caller,
-                r.name,
-                op,
-                precheck=(f"{cell.name}.{r.name}:write", "new"),
-                idempotency_key=idempotency_key,
+            row = referenced(
+                lambda: write(
+                    caller,
+                    r.name,
+                    op,
+                    precheck=(f"{cell.name}.{r.name}:write", "new"),
+                    idempotency_key=idempotency_key,
+                )
             )
             publish_soon(background, caller)
             relay_soon(background, caller)
@@ -981,6 +1020,7 @@ def create_app(
                         status_code=422,
                         detail={"error": "invalid_value", "fields": bad},
                     )
+                check_references(work, r, data)  # only references this patch changes
                 if not data:
                     return Plan(
                         f"{cell.name}.{r.name}:write",
@@ -1002,11 +1042,13 @@ def create_app(
                     row,
                 )
 
-            row = write(
-                caller,
-                r.name,
-                op,
-                precheck=(f"{cell.name}.{r.name}:write", str(record_id)),
+            row = referenced(
+                lambda: write(
+                    caller,
+                    r.name,
+                    op,
+                    precheck=(f"{cell.name}.{r.name}:write", str(record_id)),
+                )
             )
             publish_soon(background, caller)
             relay_soon(background, caller)
@@ -1016,8 +1058,23 @@ def create_app(
             f"/v1/{r.plural}/{{record_id}}", status_code=204, name=f"delete_{r.name}"
         )
         def delete(record_id: int, caller: Caller, background: BackgroundTasks) -> None:
+            from cellkit import refs
+
+            if r.referenced_by and not refs.AUTOTRUST:
+                # SPEC-006: learn every record that points here before deciding.
+                try:
+                    refs.sync(cell)
+                except refs.Unavailable as exc:
+                    raise HTTPException(
+                        status_code=503, detail={"error": "references_unavailable"}
+                    ) from exc
+
             def op(work: Work) -> Plan:
                 before = load(work.conn, r, record_id, lock=True)
+                if refs.has_dependents(work.conn, cell, r, record_id):
+                    raise HTTPException(
+                        status_code=409, detail={"error": "has_dependents"}
+                    )
                 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table/column names are module constants or spec-validated identifiers; values are bound as %s parameters
                 work.conn.execute(f"DELETE FROM {table} WHERE id = %s", (record_id,))
                 return Plan(
