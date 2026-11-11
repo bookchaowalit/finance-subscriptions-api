@@ -118,6 +118,8 @@ class Resource:
     legacy_table: str | None = None
     legacy_id_from: str = "id"
     legacy_values: tuple[tuple[str, tuple[tuple[Any, Any], ...]], ...] = ()
+    # Old column names per field ({field: old_column}) for fields renamed since the SQLite tables.
+    legacy_columns: tuple[tuple[str, str], ...] = ()
 
     def field(self, name: str) -> Field:
         for f in self.fields:
@@ -311,6 +313,7 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
             "legacy_table",
             "legacy_id_from",
             "legacy_values",
+            "legacy_columns",
         }
         if unknown:
             raise SpecError(f"{rname}: unknown keys {sorted(unknown)}")
@@ -322,6 +325,14 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
             if field_name not in names:
                 raise SpecError(
                     f"{rname}: legacy_values names unknown field {field_name!r}"
+                )
+        legacy_columns = tuple(
+            (str(k), str(v)) for k, v in (raw.get("legacy_columns") or {}).items()
+        )
+        for field_name, _ in legacy_columns:
+            if field_name not in names:
+                raise SpecError(
+                    f"{rname}: legacy_columns names unknown field {field_name!r}"
                 )
         resources.append(
             Resource(
@@ -337,6 +348,7 @@ def parse(data: dict[str, Any], root: Path = Path(".")) -> Cell:
                 legacy_table=raw.get("legacy_table"),
                 legacy_id_from=raw.get("legacy_id_from", "id"),
                 legacy_values=legacy_values,
+                legacy_columns=legacy_columns,
             )
         )
     if not resources:

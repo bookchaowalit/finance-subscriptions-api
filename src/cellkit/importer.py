@@ -110,10 +110,12 @@ def body_of(
     rewrites = {name: dict(mapping) for name, mapping in r.legacy_values}
     out: dict[str, Any] = {"legacy_id": int(row[r.legacy_id_from])}
     later: dict[str, Any] = {}
+    sources = dict(r.legacy_columns)
     for f in r.fields:
-        if f.name not in row:
+        source = sources.get(f.name, f.name)
+        if source not in row:
             continue
-        value = row[f.name]
+        value = row[source]
         if f.name in rewrites and value in rewrites[f.name]:
             value = rewrites[f.name][value]
         value = convert(f, value)

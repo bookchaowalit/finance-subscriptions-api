@@ -32,7 +32,7 @@ import math
 import os
 import re
 import uuid
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -54,9 +54,10 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import BaseModel, BeforeValidator, ConfigDict, create_model
 from pydantic import Field as PydanticField
 
 from cellkit._sentry import capture
@@ -83,6 +84,49 @@ STANDARD_PARAMS = {
 MAX_LIMIT = 1000
 
 
+# --- exact JSON numbers --------------------------------------------------------------------------
+
+
+class ExactFloat(float):
+    """A JSON number that keeps its source text, so money and decimal fields read every digit.
+
+    It is still a float for every other field (and for JSON encoding); only the exact numeric
+    types look at ``text``.
+    """
+
+    text: str
+
+    def __new__(cls, text: str) -> "ExactFloat":
+        number = super().__new__(cls, text)
+        number.text = text
+        return number
+
+
+def _exact(value: Any) -> Any:
+    return Decimal(value.text) if isinstance(value, ExactFloat) else value
+
+
+class _ExactJsonRequest(HttpRequest):
+    async def json(self) -> Any:
+        if not hasattr(self, "_json"):
+            self._json = json.loads(await self.body(), parse_float=ExactFloat)
+        return self._json
+
+
+class ExactRoute(APIRoute):
+    """Parses request bodies with ``ExactFloat`` instead of binary floats."""
+
+    def get_route_handler(
+        self,
+    ) -> Callable[[HttpRequest], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def exact(request: HttpRequest) -> Response:
+            return await handler(_ExactJsonRequest(request.scope, request.receive))
+
+        return exact
+
+
 # --- models from the spec ------------------------------------------------------------------------
 
 
@@ -95,8 +139,8 @@ def _python_type(f: Field) -> Any:
         "bigint": int,
         "ref": int,
         "real": float,
-        "money": Decimal,
-        "decimal": Decimal,
+        "money": Annotated[Decimal, BeforeValidator(_exact)],
+        "decimal": Annotated[Decimal, BeforeValidator(_exact)],
         "currency": str,
         "bool": bool,
         "date": date,
@@ -143,7 +187,8 @@ def _constraints(f: Field) -> dict[str, Any]:
         # Exact: refuse more decimal places than the column keeps (no silent rounding), NaN/Infinity,
         # and whole numbers past the column (a 422, not a numeric overflow 500).
         precision, scale = NUMERIC[f.type]
-        top = Decimal(10) ** (precision - scale) - Decimal(10) ** -scale
+        # Built from text: arithmetic would round to the default 28-digit context.
+        top = Decimal("9" * (precision - scale) + "." + "9" * scale)
         out["decimal_places"] = scale
         out["allow_inf_nan"] = False
         floor = Decimal(str(f.min)) if f.min is not None else -top
@@ -307,6 +352,7 @@ def create_app(
     publisher_token: Callable[[], str | None] = lambda: None,
 ) -> FastAPI:
     app = FastAPI(title=f"{cell.title} API", version="1.0.0", description=__doc__)
+    app.router.route_class = ExactRoute
     log = logging.getLogger(f"cell.{cell.name}")
 
     @app.exception_handler(RequestValidationError)

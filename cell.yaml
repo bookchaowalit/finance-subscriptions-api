@@ -5,6 +5,8 @@ cell: subscriptions
 title: Subscriptions
 resources:
   subscription:
+    legacy_columns:
+      scope: owner_scope
     filters:
     - status
     - scope

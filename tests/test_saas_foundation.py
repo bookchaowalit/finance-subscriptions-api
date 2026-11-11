@@ -69,6 +69,26 @@ def test_owner_scope_became_a_workspace_label():
         )
 
 
+def test_imports_map_the_old_owner_scope_column():
+    from cellkit.importer import body_of
+
+    for r in cell().resources:
+        if "scope" not in r.columns:
+            continue
+        row = {r.legacy_id_from: 7, "owner_scope": "venture"}
+        assert body_of(r, row)[0].get("scope") == "venture", r.name
+
+
+def test_numeric_bounds_are_exact():
+    from cellkit.app import _constraints
+
+    item = _one({"amount": {"type": "money"}, "qty": {"type": "decimal"}})
+    money, qty = (_constraints(f) for f in item.fields)
+    assert str(money["le"]) == "999999999999999.9999"
+    assert str(money["ge"]) == "-999999999999999.9999"
+    assert str(qty["le"]) == "99999999999999999999.9999999999"
+
+
 # --- spec and SQL (AC-01..AC-05) ---------------------------------------------------------------
 
 

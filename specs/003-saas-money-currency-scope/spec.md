@@ -7,7 +7,7 @@ Phase 1 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-003 / 1.0 |
+| Spec ID / version | SPEC-003 / 1.1 |
 | Status | approved (2026-11-11, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/003-saas-money-currency-scope/spec.md` (copy of the reference in finance-budgets-api) |
 | Owner (maker) | Claude Code (implementer session, 2026-11-11) |
@@ -83,6 +83,7 @@ Phase 1 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | Version | Date | Change | Scenarios affected | Approved by |
 |---|---|---|---|---|
 | 1.0 | 2026-11-11 | money/decimal/currency types, scope label, migration 0002, health commit | AC-01..AC-08 | owner, chat 2026-11-11 |
+| 1.1 | 2026-11-11 | Codex review fixes: JSON number literals are read exactly (`ExactRoute`, no binary float on the way in); numeric bounds built from text (the default 28-digit context rounded the `decimal` ceiling to 10^20); importer maps the old `owner_scope` column (`legacy_columns`); the new contract tests are in `__all__` (they had not run). Red: `test_imports_map_the_old_owner_scope_column`, `test_numeric_bounds_are_exact`, `test_money_is_exact` failed; green: 301 passed, 14 skipped, 1 xfailed, mypy and ruff clean | AC-01, AC-03, AC-06 | owner, chat 2026-11-11 (review fixes inside the approved scope) |
 
 ## Approval
 

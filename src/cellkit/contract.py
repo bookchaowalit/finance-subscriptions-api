@@ -24,6 +24,7 @@ from cellkit.testing import body, sample
 __all__ = [
     "pytest_generate_tests",
     "test_authorization",
+    "test_currency_is_iso_4217",
     "test_executions_are_bound_to_the_record",
     "test_idempotent_create",
     "test_import_keeps_the_old_id",
@@ -32,6 +33,7 @@ __all__ = [
     "test_jwks_verification",
     "test_lifecycle",
     "test_missing_reference",
+    "test_money_is_exact",
     "test_no_reference_across_workspaces",
     "test_numbers_fit_their_columns",
     "test_publisher_delivers_the_outbox",
@@ -495,6 +497,12 @@ def test_numbers_fit_their_columns(client, owner, harness, resource):
 
 
 # Exact decimal values per type: (accepted input, stored and returned text, refused inputs).
+# JSON number literals (sent as raw text) that a binary float would round.
+_RAW_EXACT = {
+    "money": ("12345678901234.5678", "12345678901234.5678"),
+    "decimal": ("1234567890.1234567891", "1234567890.1234567891"),
+}
+
 _EXACT: dict[str, tuple[list[tuple[Any, str]], list[str]]] = {
     "money": (
         [("1234.5678", "1234.5678"), (0.1, "0.1000"), ("7", "7.0000")],
@@ -525,8 +533,22 @@ def test_money_is_exact(client, owner, harness, resource):
             created = client.post(f"/v1/{r.plural}", json=payload, headers=owner)
             assert created.status_code == 201, (f.name, sent, created.text)
             assert created.json()[f.name] == stored, (f.name, sent)
-            again = client.get(f"/v1/{r.plural}/{created.json()['id']}", headers=owner)
-            assert again.json()[f.name] == stored
+            path = f"/v1/{r.plural}/{created.json()['id']}"
+            assert client.get(path, headers=owner).json()[f.name] == stored
+            # Samples repeat across n; remove the record so unique fields cannot collide.
+            assert client.delete(path, headers=owner).status_code == 204
+        literal, stored = _RAW_EXACT[f.type]
+        sent = json.dumps({**body(r, refs, 550 + n), f.name: 0.5}).replace(
+            "0.5", literal, 1
+        )
+        created = client.post(
+            f"/v1/{r.plural}",
+            content=sent,
+            headers={**owner, "content-type": "application/json"},
+        )
+        assert created.status_code == 201, (f.name, literal, created.text)
+        assert created.json()[f.name] == stored, (f.name, literal)
+        client.delete(f"/v1/{r.plural}/{created.json()['id']}", headers=owner)
         for raw in [*bad, *(["-1"] if f.min is not None and f.min >= 0 else [])]:
             payload = {**body(r, refs, 600 + n), f.name: raw}
             refused = client.post(f"/v1/{r.plural}", json=payload, headers=owner)
