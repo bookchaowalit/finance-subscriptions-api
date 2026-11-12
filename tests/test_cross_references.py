@@ -910,3 +910,40 @@ def test_a_catch_up_stops_applying_at_its_deadline_and_resumes_there(
             " WHERE partition = 0"
         ).fetchone()
     assert 1 <= saved < 3  # some progress, never past what was applied
+
+
+def test_watermark_reads_share_the_catch_up_deadline():
+    """Each watermark call gets only the time left; past the deadline the read stops (503)."""
+    import time as _time
+    from types import SimpleNamespace
+
+    from cellkit import refs
+
+    timeouts: list[float] = []
+
+    class _SlowMarks(_Consumer):
+        def list_topics(self, topic, timeout):
+            return SimpleNamespace(
+                topics={topic: SimpleNamespace(partitions={0: None, 1: None, 2: None})}
+            )
+
+        def get_watermark_offsets(self, tp, timeout):
+            timeouts.append(timeout)
+            _time.sleep(0.3)
+            return (0, 0)
+
+    reader = _reader(_SlowMarks([]))
+    with pytest.raises(refs.Unavailable):
+        reader.read({}, _time.monotonic() + 0.5)
+    assert len(timeouts) == 2  # the third partition is not asked once time is up
+    assert all(t <= 0.5 for t in timeouts)
+
+
+def test_a_boolean_reference_is_malformed_not_empty():
+    """`account_id: true` is refused (the message is skipped), never stored as no reference."""
+    from cellkit import refs
+
+    for value in (True, False):
+        with pytest.raises(ValueError, match="integer"):
+            refs._bigint(value)
+    assert refs._bigint(None) is None

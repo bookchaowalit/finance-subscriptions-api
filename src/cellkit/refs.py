@@ -138,9 +138,13 @@ NEWER = (
 
 
 def _bigint(value: Any) -> int | None:
-    """An int that fits a bigint column, or None (bools and anything else are refused)."""
-    if value is None or isinstance(value, bool):
+    """An int that fits a bigint column, or None for null (bools and anything else are refused)."""
+    if value is None:
         return None
+    if isinstance(value, bool):
+        raise ValueError(
+            "not an integer"
+        )  # true/false is malformed, never "no reference"
     if isinstance(value, str) and value.lstrip("-").isdigit():
         number = int(value)
     elif isinstance(value, int):
@@ -326,10 +330,15 @@ class KafkaReader:
         ):
             raise Unavailable("topic metadata")
         partitions = sorted(topic.partitions)
-        marks = {
-            p: self.consumer.get_watermark_offsets(TopicPartition(TOPIC, p), timeout=5)
-            for p in partitions
-        }
+        marks: dict[int, tuple[int, int]] = {}
+        for p in partitions:
+            # Each call gets only what is left of the catch-up deadline, never a fresh 5 s.
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise Unavailable("catch-up deadline")
+            marks[p] = self.consumer.get_watermark_offsets(
+                TopicPartition(TOPIC, p), timeout=min(5.0, left)
+            )
         # A stored position below the low watermark means events expired unread (retention):
         # the reference state may be missing deletes, so refuse rather than call it complete.
         # Only partitions that delivered something store a position, so once the reader has any

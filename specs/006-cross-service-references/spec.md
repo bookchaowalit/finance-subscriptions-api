@@ -7,7 +7,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 1.8 |
+| Spec ID / version | SPEC-006 / 1.9 |
 | Status | approved (2026-11-11, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/006-cross-service-references/spec.md` (copy of the reference in finance-transactions-api) |
 | Owner (maker) | Claude Code (implementer session, 2026-11-11) |
@@ -90,6 +90,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | 1.6 | 2026-11-11 | Codex review: a catch-up that hits its deadline keeps what it read (position saved, then 503 this time), so a large backlog drains over several calls. Red: `test_a_catch_up_that_runs_out_of_time_keeps_what_it_read`; green: 411 passed, 10 skipped, 1 xfailed | owner, chat 2026-11-11 |
 | 1.7 | 2026-11-11 | Security review: every partition the reader looked at gets a stored position (its end, or where it starts), so a quiet partition with expired messages never makes the next read fail as "history expired". Red: `test_a_quiet_partition_gets_a_position_so_the_next_read_is_not_stuck`; green: 412 passed, 10 skipped, 1 xfailed | owner, chat 2026-11-11 |
 | 1.8 | 2026-11-12 | Codex review: a live record's event without its reference field is malformed and skipped (it never clears a dependent, so a referenced record stays undeletable); one deadline covers reading and applying, applying stops at it after at least one message and the position never moves past an unapplied message. Red: `test_an_event_missing_its_reference_field_never_clears_a_dependent`, `test_a_catch_up_stops_applying_at_its_deadline_and_resumes_there`; green: full suite, mypy and ruff clean in all ten cells (transactions: 333 passed, 8 skipped, 1 xfailed) | owner, chat 2026-11-11 |
+| 1.9 | 2026-11-12 | Codex review: a boolean id or reference (`account_id: true`) is malformed and the message is skipped, never stored as "no reference"; each Kafka watermark call gets only what is left of the catch-up deadline and the read stops (503) once it is spent. Red: `test_a_boolean_reference_is_malformed_not_empty`, `test_watermark_reads_share_the_catch_up_deadline`; green: full suite, mypy and ruff clean in all ten cells (transactions: 337 passed, 8 skipped, 1 xfailed) | owner, chat 2026-11-11 |
 
 ## Approval
 
