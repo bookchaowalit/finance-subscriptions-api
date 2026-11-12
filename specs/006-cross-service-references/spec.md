@@ -7,7 +7,7 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 1.9 |
+| Spec ID / version | SPEC-006 / 1.11 |
 | Status | approved (2026-11-11, see Approval) |
 | Repository / path | bookchaowalit/finance-subscriptions-api / `specs/006-cross-service-references/spec.md` (copy of the reference in finance-transactions-api) |
 | Owner (maker) | Claude Code (implementer session, 2026-11-11) |
@@ -91,6 +91,8 @@ Phase 3 of the finance SaaS plan (2026-11-11). The same change lands in all ten 
 | 1.7 | 2026-11-11 | Security review: every partition the reader looked at gets a stored position (its end, or where it starts), so a quiet partition with expired messages never makes the next read fail as "history expired". Red: `test_a_quiet_partition_gets_a_position_so_the_next_read_is_not_stuck`; green: 412 passed, 10 skipped, 1 xfailed | owner, chat 2026-11-11 |
 | 1.8 | 2026-11-12 | Codex review: a live record's event without its reference field is malformed and skipped (it never clears a dependent, so a referenced record stays undeletable); one deadline covers reading and applying, applying stops at it after at least one message and the position never moves past an unapplied message. Red: `test_an_event_missing_its_reference_field_never_clears_a_dependent`, `test_a_catch_up_stops_applying_at_its_deadline_and_resumes_there`; green: full suite, mypy and ruff clean in all ten cells (transactions: 333 passed, 8 skipped, 1 xfailed) | owner, chat 2026-11-11 |
 | 1.9 | 2026-11-12 | Codex review: a boolean id or reference (`account_id: true`) is malformed and the message is skipped, never stored as "no reference"; each Kafka watermark call gets only what is left of the catch-up deadline and the read stops (503) once it is spent. Red: `test_a_boolean_reference_is_malformed_not_empty`, `test_watermark_reads_share_the_catch_up_deadline`; green: full suite, mypy and ruff clean in all ten cells (transactions: 337 passed, 8 skipped, 1 xfailed) | owner, chat 2026-11-11 |
+| 1.10 | 2026-11-12 | Codex review: when applying stops at the deadline, a partition with nothing applied yet stores its first unapplied offset (before, it got no `ref_offsets` row and every later read reported "unread history expired", 503). platform-cellkit 1.0.4. Red: `test_a_partition_left_unapplied_at_the_deadline_still_gets_a_position` | Codex P1, fixed in the kit |
+| 1.11 | 2026-11-12 | Codex review, **reverses the 1.1 line "the reader starts at the low watermark"**: a fresh reader (no `ref_offsets` rows) whose low watermark is above 0 is Unavailable (503), "history expired before the first read". Bootstrap is an operator step: rebuild the reference state (re-snapshot the producers), then seed `ref_offsets` at the low watermark of each partition. platform-cellkit 1.0.5. Red: `test_a_fresh_reader_refuses_history_that_expired_before_its_first_read` | owner, chat 2026-11-12 |
 
 ## Approval
 
