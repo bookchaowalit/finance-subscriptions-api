@@ -899,6 +899,52 @@ wheels = [
 ]
 
 [[package]]
+name = "platform-cellkit"
+version = "1.0.3"
+source = { url = "https://github.com/bookchaowalit/platform-cellkit/releases/download/v1.0.3/platform_cellkit-1.0.3-py3-none-any.whl" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "pyyaml" },
+    { name = "sentry-sdk" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+wheels = [
+    { url = "https://github.com/bookchaowalit/platform-cellkit/releases/download/v1.0.3/platform_cellkit-1.0.3-py3-none-any.whl", hash = "sha256:129973f926fd3d4f50a3841f08c8d4083932c5b242bd03daa0f654943b7c50ac" },
+]
+
+[package.optional-dependencies]
+kafka = [
+    { name = "confluent-kafka" },
+]
+mcp = [
+    { name = "mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "confluent-kafka", marker = "extra == 'dev'", specifier = ">=2.6,<3" },
+    { name = "confluent-kafka", marker = "extra == 'kafka'", specifier = ">=2.6,<3" },
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "mcp", marker = "extra == 'dev'", specifier = ">=2.3,<3" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3,<3" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4" },
+    { name = "pgserver", marker = "extra == 'dev'", specifier = ">=0.1.4" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7" },
+    { name = "pyyaml", specifier = ">=6,<7" },
+    { name = "sentry-sdk", specifier = ">=2.72,<3" },
+    { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1" },
+]
+provides-extras = ["mcp", "kafka", "dev"]
+
+[[package]]
 name = "platformdirs"
 version = "4.13.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1448,6 +1494,7 @@ dependencies = [
     { name = "confluent-kafka" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "platform-cellkit", extra = ["kafka"] },
     { name = "psycopg", extra = ["binary"] },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pyyaml" },
@@ -1466,6 +1513,7 @@ dev = [
 ]
 mcp = [
     { name = "mcp" },
+    { name = "platform-cellkit", extra = ["mcp"] },
 ]
 
 [package.metadata]
@@ -1477,6 +1525,8 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3,<3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4" },
     { name = "pgserver", marker = "extra == 'dev'", specifier = ">=0.1.4" },
+    { name = "platform-cellkit", extras = ["kafka"], url = "https://github.com/bookchaowalit/platform-cellkit/releases/download/v1.0.3/platform_cellkit-1.0.3-py3-none-any.whl" },
+    { name = "platform-cellkit", extras = ["mcp"], marker = "extra == 'mcp'" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
