@@ -606,14 +606,26 @@ def test_a_reader_is_built_from_complete_kafka_settings(harness, monkeypatch):
     assert built[0]["group.id"] == f"{harness.cell.name}-refs"
 
 
-def test_a_fresh_reader_starts_at_the_oldest_message_left():
+def test_a_fresh_reader_refuses_history_that_expired_before_its_first_read():
+    """SPEC-006 1.11 (owner 2026-11-12): with no stored position and a low watermark above 0, the
+    events before it (creates, snapshots) are gone, so the reference state would miss dependents.
+    Fail closed; the operator seeds ref_offsets once the state is rebuilt."""
     import time as _time
+
+    from cellkit import refs
 
     class _Expired(_Consumer):
         def get_watermark_offsets(self, tp, timeout):
             return (5, 5)  # everything before offset 5 is gone, nothing new
 
-    assert _reader(_Expired([])).read({}, _time.monotonic() + 1) == []
+    with pytest.raises(refs.Unavailable, match="before the first read"):
+        _reader(_Expired([])).read({}, _time.monotonic() + 1)
+
+
+def test_a_fresh_reader_with_its_whole_history_reads_from_zero():
+    import time as _time
+
+    assert _reader(_Consumer([], end=0)).read({}, _time.monotonic() + 1) == []
 
 
 def test_unread_history_that_expired_is_not_reported_as_read():
@@ -836,13 +848,20 @@ def test_a_catch_up_that_runs_out_of_time_keeps_what_it_read(harness, monkeypatc
 
 
 def test_a_quiet_partition_gets_a_position_so_the_next_read_is_not_stuck(harness):
-    """A fresh reader starts a partition with expired messages at its low watermark and saves that."""
+    """A partition seeded at its low watermark keeps a position, so the next read is not stuck."""
     import time as _time
     from types import SimpleNamespace
 
     from cellkit import refs
 
-    harness.superuser(f"DELETE FROM {harness.cell.schema}.ref_offsets RETURNING 1")
+    s = harness.cell.schema
+    harness.superuser(f"DELETE FROM {s}.ref_offsets RETURNING 1")
+    # Bootstrap (SPEC-006 1.11): partition 1 lost offsets 0-3 to retention; after rebuilding the
+    # reference state the operator seeds its position at the low watermark.
+    harness.superuser(
+        f"INSERT INTO {s}.ref_offsets (topic, partition, next_offset)"
+        f" VALUES ('{refs.TOPIC}', 1, 4) RETURNING 1"
+    )
 
     class _Two(_Consumer):
         def list_topics(self, topic, timeout):
@@ -853,7 +872,7 @@ def test_a_quiet_partition_gets_a_position_so_the_next_read_is_not_stuck(harness
         def get_watermark_offsets(self, tp, timeout):
             return (
                 (0, 1) if tp.partition == 0 else (4, 4)
-            )  # partition 1: expired, nothing new
+            )  # partition 1: expired (seeded at 4), nothing new
 
     with harness.cluster.connect(harness.cell.role("publisher")) as conn:
         assert (
@@ -908,6 +927,55 @@ def test_a_catch_up_stops_applying_at_its_deadline_and_resumes_there(
             " WHERE partition = 0"
         ).fetchone()
     assert 1 <= saved < 3  # some progress, never past what was applied
+
+
+def test_a_partition_left_unapplied_at_the_deadline_still_gets_a_position(
+    harness, monkeypatch
+):
+    """SPEC-006 1.10: a partition with nothing applied before the deadline stores its first unapplied
+    offset, so the next read starts there and never reports "unread history expired"."""
+    import time as _time
+    from types import SimpleNamespace
+
+    from cellkit import refs
+
+    s = harness.cell.schema
+    harness.superuser(f"DELETE FROM {s}.ref_offsets RETURNING 1")
+    real_clock = _time.monotonic  # refs.time is this same module
+    clock = iter(range(0, 10_000, 4))  # each call to the clock moves 4 s on
+    monkeypatch.setattr(refs.time, "monotonic", lambda: float(next(clock)))
+
+    class _Batch:
+        def __init__(self) -> None:
+            self.positions = {0: 2, 1: 8}
+
+        def read(self, start, deadline):
+            return [(0, 0, {"probe": 0}), (0, 1, {"probe": 1}), (1, 7, {"probe": 7})]
+
+    with harness.cluster.connect(harness.cell.role("publisher")) as conn:
+        with pytest.raises(refs.Unavailable):
+            refs.catch_up(conn, harness.cell, _Batch(), seconds=5.0)
+        saved = dict(
+            conn.execute(
+                f"SELECT partition, next_offset FROM {s}.ref_offsets ORDER BY partition"
+            ).fetchall()
+        )
+    # Partition 0 applied both of its messages; partition 1 applied none (the deadline came first).
+    assert saved == {0: 2, 1: 7}
+
+    monkeypatch.setattr(refs.time, "monotonic", real_clock)
+
+    class _Marks(_Consumer):
+        def list_topics(self, topic, timeout):
+            return SimpleNamespace(
+                topics={topic: SimpleNamespace(partitions={0: None, 1: None})}
+            )
+
+        def get_watermark_offsets(self, tp, timeout):
+            return (0, 1) if tp.partition == 0 else (7, 7)
+
+    # Partition 1 starts at its stored 7 (= low watermark): not "history expired".
+    assert _reader(_Marks([])).read(saved, real_clock() + 1) == []
 
 
 def test_watermark_reads_share_the_catch_up_deadline():
