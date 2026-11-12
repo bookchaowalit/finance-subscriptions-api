@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from cellkit.contract import make
 from cellkit.spec import SpecError, load, parse
 from cellkit.testing import body
@@ -787,7 +786,6 @@ def test_a_database_failure_keeps_the_position_for_a_retry(
     harness, reader, monkeypatch
 ):
     import psycopg as _psycopg
-
     from cellkit import refs
 
     if not _referencing():

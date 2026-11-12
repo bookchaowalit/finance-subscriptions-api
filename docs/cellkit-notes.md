@@ -1,5 +1,9 @@
 # cellkit notes
 
+> **2026-11-12: moved out.** The kit is now the pinned `platform-cellkit` package
+> (https://github.com/bookchaowalit/platform-cellkit). The history below is the vendored copy's
+> record up to that move; new kit changes are recorded in that repository.
+
 `src/cellkit/` is this service's own framework code. It was first generated from `cell.yaml` by the shared generator (solo-cell-kit, retired 2026-10-12), and it is changed here only. Nothing upstream is synced; other cells keep their own copies (owner decision 2026-10-21).
 
 ## Before Wave 2

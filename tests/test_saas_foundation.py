@@ -12,7 +12,6 @@ from pathlib import Path
 
 import psycopg
 import pytest
-
 from cellkit import sqlgen
 from cellkit.spec import SpecError, load, parse
 

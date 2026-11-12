@@ -10,7 +10,6 @@ from typing import Any
 
 import psycopg
 import pytest
-
 from cellkit.contract import (
     make,
     pytest_generate_tests,  # noqa: F401 - parametrizes `resource`
