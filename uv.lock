@@ -900,8 +900,8 @@ wheels = [
 
 [[package]]
 name = "platform-cellkit"
-version = "1.1.0"
-source = { url = "https://github.com/bookchaowalit/platform-cellkit/releases/download/v1.1.0/platform_cellkit-1.1.0-py3-none-any.whl" }
+version = "1.1.1"
+source = { url = "https://github.com/bookchaowalit/platform-cellkit/releases/download/v1.1.1/platform_cellkit-1.1.1-py3-none-any.whl" }
 dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
@@ -913,7 +913,7 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 wheels = [
-    { url = "https://github.com/bookchaowalit/platform-cellkit/releases/download/v1.1.0/platform_cellkit-1.1.0-py3-none-any.whl", hash = "sha256:bc5354cbc56684fe2011b7b8ec1d7143039beca75bdda924315058548ded8821" },
+    { url = "https://github.com/bookchaowalit/platform-cellkit/releases/download/v1.1.1/platform_cellkit-1.1.1-py3-none-any.whl", hash = "sha256:90b525728f06ace51718bcf43993a8f2eac7e9623f49fdb58099c5230fb2ee74" },
 ]
 
 [package.optional-dependencies]
@@ -1527,7 +1527,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3,<3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.4" },
     { name = "pgserver", marker = "extra == 'dev'", specifier = ">=0.1.4" },
-    { name = "platform-cellkit", extras = ["kafka"], url = "https://github.com/bookchaowalit/platform-cellkit/releases/download/v1.1.0/platform_cellkit-1.1.0-py3-none-any.whl" },
+    { name = "platform-cellkit", extras = ["kafka"], url = "https://github.com/bookchaowalit/platform-cellkit/releases/download/v1.1.1/platform_cellkit-1.1.1-py3-none-any.whl" },
     { name = "platform-cellkit", extras = ["mcp"], marker = "extra == 'mcp'" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
