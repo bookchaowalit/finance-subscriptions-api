@@ -236,3 +236,55 @@ def test_the_job_prints_signature_counts_when_checking(
         "invalid": 0,
         "unknown_producer": 0,
     }
+
+
+def test_under_enforce_a_missing_signing_key_sends_nothing(
+    harness, monkeypatch, capsys
+):
+    """A lost secret ("" in GitHub Actions) must not send unsigned events that enforce would drop."""
+    import test_finance_events as fe
+    from cellkit import relay
+
+    fe._drain(harness)
+    fe._insert_event(
+        harness,
+        uuid.uuid4(),
+        f"empire:{harness.cell.name}:{harness.cell.resources[0].name}:454545",
+        1,
+        "1 minute",
+    )
+    monkeypatch.setenv(f"{harness.cell.env}_EVENT_SIGNING_KEY", "")
+    monkeypatch.setenv(f"{harness.cell.env}_EVENT_SIGNATURES", "enforce")
+    _seed, public = _seed_and_public()
+    monkeypatch.setenv(f"{harness.cell.env}_EVENT_KEYS", json.dumps({"x": [public]}))
+    fake = fe.FakePublisher()
+    monkeypatch.setattr(relay, "publisher_from_env", lambda _cell: fake)
+    _job_env(harness, monkeypatch)
+    assert relay.main([]) == 2
+    assert json.loads(capsys.readouterr().out) == {"error": "missing signing key"}
+    assert fake.sent == []
+    monkeypatch.delenv(f"{harness.cell.env}_EVENT_SIGNATURES")
+    fe._drain(harness)
+
+
+def test_bad_event_keys_under_enforce_are_a_json_error_from_the_job(
+    harness, monkeypatch, capsys
+):
+    import test_finance_events as fe
+    from cellkit import relay
+
+    fe._drain(harness)
+    seed, _public = _seed_and_public()
+    monkeypatch.setenv(f"{harness.cell.env}_EVENT_SIGNING_KEY", seed)
+    monkeypatch.setenv(f"{harness.cell.env}_EVENT_SIGNATURES", "enforce")
+    monkeypatch.setenv(f"{harness.cell.env}_EVENT_KEYS", "not json")
+    monkeypatch.setattr(relay, "publisher_from_env", lambda _cell: fe.FakePublisher())
+    from cellkit import refs
+
+    def unavailable(_conn, _cell):
+        raise refs.Unavailable("bad event keys")
+
+    monkeypatch.setattr(relay, "_catch_up_references", unavailable)
+    _job_env(harness, monkeypatch)
+    assert relay.main([]) == 2
+    assert json.loads(capsys.readouterr().out) == {"error": "bad event keys"}
