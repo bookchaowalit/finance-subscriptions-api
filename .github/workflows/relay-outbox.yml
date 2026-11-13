@@ -50,6 +50,11 @@ jobs:
           SUBSCRIPTIONS_KAFKA_CA_PEM: ${{ secrets.SUBSCRIPTIONS_KAFKA_CA_PEM }}
           SUBSCRIPTIONS_KAFKA_USERNAME: ${{ secrets.SUBSCRIPTIONS_KAFKA_USERNAME }}
           SUBSCRIPTIONS_KAFKA_PASSWORD: ${{ secrets.SUBSCRIPTIONS_KAFKA_PASSWORD }}
+          # SPEC-002 signed events: the signing seed is a secret; the pinned public keys and the
+          # mode (off/report/enforce) are repository variables. Unset = unsigned, unchecked.
+          SUBSCRIPTIONS_EVENT_SIGNING_KEY: ${{ secrets.SUBSCRIPTIONS_EVENT_SIGNING_KEY }}
+          SUBSCRIPTIONS_EVENT_KEYS: ${{ vars.SUBSCRIPTIONS_EVENT_KEYS }}
+          SUBSCRIPTIONS_EVENT_SIGNATURES: ${{ vars.SUBSCRIPTIONS_EVENT_SIGNATURES }}
         run: |
           set +e
           .venv/bin/subscriptions-relay > "$RUNNER_TEMP/relay.json" 2> "$RUNNER_TEMP/relay.err"
